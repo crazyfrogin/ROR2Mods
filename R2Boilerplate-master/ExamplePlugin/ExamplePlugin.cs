@@ -33,7 +33,8 @@ namespace ExamplePlugin
         private ConfigEntry<float> _overclockDamageMultiplier;
         private ConfigEntry<float> _overclockAttackSpeedMultiplier;
         private ConfigEntry<float> _overclockMoveSpeedMultiplier;
-        private ConfigEntry<float> _nonBossDamageMultiplier;
+        private ConfigEntry<float> _overclockStageBonusMultiplier;
+        private ConfigEntry<float> _nonBossMinimumPlayerHealthFractionPerHit;
         private ConfigEntry<float> _blinkDistance;
         private ConfigEntry<float> _blinkNoHitSeconds;
         private ConfigEntry<float> _blinkNoLineOfSightSeconds;
@@ -62,12 +63,13 @@ namespace ExamplePlugin
 
         private void BindConfig()
         {
-            _overclockHealthMultiplier = Config.Bind("Overclock", "HealthMultiplier", 4.0f, "Teleporter boss health multiplier.");
-            _overclockDamageMultiplier = Config.Bind("Overclock", "DamageMultiplier", 2.0f, "Teleporter boss damage multiplier.");
-            _overclockAttackSpeedMultiplier = Config.Bind("Overclock", "AttackSpeedMultiplier", 1.4f, "Teleporter boss attack speed multiplier.");
-            _overclockMoveSpeedMultiplier = Config.Bind("Overclock", "MoveSpeedMultiplier", 1.35f, "Teleporter boss movement speed multiplier.");
+            _overclockHealthMultiplier = Config.Bind("Overclock", "HealthMultiplier", 8.0f, "Boss health multiplier.");
+            _overclockDamageMultiplier = Config.Bind("Overclock", "DamageMultiplier", 3.0f, "Boss damage multiplier.");
+            _overclockAttackSpeedMultiplier = Config.Bind("Overclock", "AttackSpeedMultiplier", 1.6f, "Boss attack speed multiplier.");
+            _overclockMoveSpeedMultiplier = Config.Bind("Overclock", "MoveSpeedMultiplier", 1.45f, "Boss movement speed multiplier.");
+            _overclockStageBonusMultiplier = Config.Bind("Overclock", "StageBonusMultiplier", 0.20f, "Extra overclock multiplier added per stage after stage 1. Example: 0.2 means stage 2 is x1.2, stage 3 is x1.4.");
 
-            _nonBossDamageMultiplier = Config.Bind("DangerTuning", "NonBossDamageMultiplier", 1.0f, "Optional outgoing damage multiplier for non-boss enemies. 1.0 means disabled.");
+            _nonBossMinimumPlayerHealthFractionPerHit = Config.Bind("DangerTuning", "NonBossMinimumPlayerHealthFractionPerHit", 0.30f, "Minimum share of player full combined health dealt per non-boss enemy hit. 0 disables this floor.");
 
             _blinkDistance = Config.Bind("Blink", "DistanceThreshold", 40.0f, "Boss blink can trigger when farther than this distance from the target.");
             _blinkNoHitSeconds = Config.Bind("Blink", "NoHitSeconds", 2.0f, "Boss blink can trigger when boss has not hit a player for this many seconds.");
@@ -175,12 +177,12 @@ namespace ExamplePlugin
 
                 _protectedBossMasters.Add(master);
 
+                StartCoroutine(ApplyOverclockWhenBodyReady(master));
+
                 if (!teleporterBoss)
                 {
                     yield break;
                 }
-
-                StartCoroutine(ApplyOverclockWhenBodyReady(master));
 
                 if (!_teleporterScaledThisStage)
                 {
@@ -202,6 +204,10 @@ namespace ExamplePlugin
             }
 
             TrySpawnAdditionalTeleporterBosses(templateMaster, templateMaster.GetBody());
+
+            // Give newly summoned bosses a short moment to initialize bodies before forcing full health.
+            yield return new WaitForSeconds(0.35f);
+            ForceFillProtectedBossHealth();
         }
 
         private IEnumerator ApplyOverclockWhenBodyReady(CharacterMaster master)
@@ -227,11 +233,7 @@ namespace ExamplePlugin
 
                     tracker.Initialize(this);
                     body.RecalculateStats();
-
-                    if (body.healthComponent)
-                    {
-                        body.healthComponent.Networkhealth = body.healthComponent.fullHealth;
-                    }
+                    EnsureBodyAtFullHealth(body);
 
                     Log.Info($"Applied Overclock to {body.GetDisplayName()}");
                     yield break;
@@ -290,24 +292,47 @@ namespace ExamplePlugin
         private int GetTargetTeleporterBossCount()
         {
             int stage = Run.instance ? Run.instance.stageClearCount + 1 : 1;
-            float runMinutes = Run.instance ? Run.instance.GetRunStopwatch() / 60f : 0f;
+            return Mathf.Max(2, stage + 1);
+        }
 
-            if (stage <= 1)
+        private float GetOverclockStageMultiplier()
+        {
+            int stage = Run.instance ? Run.instance.stageClearCount + 1 : 1;
+            float stageBonusMultiplier = Mathf.Max(0f, _overclockStageBonusMultiplier.Value);
+            return 1f + Mathf.Max(0, stage - 1) * stageBonusMultiplier;
+        }
+
+        private void ForceFillProtectedBossHealth()
+        {
+            CleanupNullBossEntries();
+
+            foreach (CharacterMaster master in _protectedBossMasters)
             {
-                return 1;
+                if (!master)
+                {
+                    continue;
+                }
+
+                CharacterBody body = master.GetBody();
+                if (!body || !body.healthComponent || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                EnsureBodyAtFullHealth(body);
+            }
+        }
+
+        private static void EnsureBodyAtFullHealth(CharacterBody body)
+        {
+            if (!body || !body.healthComponent)
+            {
+                return;
             }
 
-            if (stage <= 3)
-            {
-                return 2;
-            }
-
-            if (stage >= 6 || runMinutes >= 30f)
-            {
-                return 4;
-            }
-
-            return 3;
+            HealthComponent healthComponent = body.healthComponent;
+            healthComponent.Networkhealth = healthComponent.fullHealth;
+            healthComponent.Networkshield = healthComponent.fullShield;
         }
 
         private static bool IsEnemyBody(CharacterBody body)
@@ -424,17 +449,20 @@ namespace ExamplePlugin
                 return;
             }
 
-            self.maxHealth *= Mathf.Max(1f, _overclockHealthMultiplier.Value);
-            self.damage *= Mathf.Max(1f, _overclockDamageMultiplier.Value);
-            self.attackSpeed *= Mathf.Max(1f, _overclockAttackSpeedMultiplier.Value);
-            self.moveSpeed *= Mathf.Max(1f, _overclockMoveSpeedMultiplier.Value);
+            float stageMultiplier = GetOverclockStageMultiplier();
+            float speedStageMultiplier = 1f + (stageMultiplier - 1f) * 0.5f;
+
+            self.maxHealth *= Mathf.Max(1f, _overclockHealthMultiplier.Value) * stageMultiplier;
+            self.damage *= Mathf.Max(1f, _overclockDamageMultiplier.Value) * stageMultiplier;
+            self.attackSpeed *= Mathf.Max(1f, _overclockAttackSpeedMultiplier.Value) * speedStageMultiplier;
+            self.moveSpeed *= Mathf.Max(1f, _overclockMoveSpeedMultiplier.Value) * speedStageMultiplier;
         }
 
         private void HealthComponent_TakeDamage(On.RoR2.HealthComponent.orig_TakeDamage orig, HealthComponent self, DamageInfo damageInfo)
         {
             if (NetworkServer.active && IsModifierActive() && self && damageInfo.damage > 0f)
             {
-                ApplyNonBossDamageReduction(self, ref damageInfo);
+                ApplyNonBossMinimumDamageFloor(self, ref damageInfo);
 
                 if (ShouldForceOneHitKill(self.body))
                 {
@@ -446,9 +474,10 @@ namespace ExamplePlugin
             orig(self, damageInfo);
         }
 
-        private void ApplyNonBossDamageReduction(HealthComponent victimHealthComponent, ref DamageInfo damageInfo)
+        private void ApplyNonBossMinimumDamageFloor(HealthComponent victimHealthComponent, ref DamageInfo damageInfo)
         {
-            if (_nonBossDamageMultiplier.Value >= 0.999f)
+            float minimumHealthFraction = Mathf.Clamp01(_nonBossMinimumPlayerHealthFractionPerHit.Value);
+            if (minimumHealthFraction <= 0f)
             {
                 return;
             }
@@ -475,12 +504,13 @@ namespace ExamplePlugin
                 return;
             }
 
-            if (IsProtectedBoss(attackerBody.master))
+            if (attackerBody.isBoss || IsProtectedBoss(attackerBody.master))
             {
                 return;
             }
 
-            damageInfo.damage *= Mathf.Clamp01(_nonBossDamageMultiplier.Value);
+            float minimumDamage = Mathf.Max(1f, victimHealthComponent.fullCombinedHealth * minimumHealthFraction);
+            damageInfo.damage = Mathf.Max(damageInfo.damage, minimumDamage);
         }
 
         private bool ShouldForceOneHitKill(CharacterBody victimBody)
