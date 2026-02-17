@@ -1,0 +1,12 @@
+﻿{
+	"name": "BossRushOneHitWorld",
+	"version_number": "1.0.0",
+	"website_url": "",
+	"description": "Artifact mod: non-boss enemies are one-hit while teleporter bosses become overclocked multi-boss encounters.",
+	"dependencies": [
+		"bbepis-BepInExPack-5.4.2108",
+		"RiskofThunder-HookGenPatcher-1.2.3",
+		"RiskofThunder-R2API_Items-1.0.8",
+		"RiskofThunder-R2API_Language-1.0.1"
+	]
+}
