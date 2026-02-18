@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Whisper</RootNamespace>
+    <AssemblyName>OpenAI.Whisper</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Optimize>true</Optimize>
+    <DebugType>embedded</DebugType>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=.</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../mirage-core/src/Mirage.fsproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Reference Include="FSharpx.Async">
+      <HintPath>../../../lib/FSharpx.Async/FSharpx.Async.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Whisper/API.fs" />
+    <Compile Include="Whisper/Transcribe.fs" />
+  </ItemGroup>
+</Project>

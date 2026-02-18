@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Mirage.Compatibility.Main</RootNamespace>
+    <AssemblyName>Mirage.Compatibility</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DebugType>embedded</DebugType>
+    <Optimize>true</Optimize>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=.</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="LethalCompany.GameLibs.Steam" Version="67.0.0-ngd.0" Publicize="true" />
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.Core" Version="5.4.21" />
+    <PackageReference Include="FSharpPlus" Version="1.6.1" />
+    <PackageReference Include="AinaVT-LethalConfig" Version="1.4.3" Publicize="true" />
+    <PackageReference Include="TeamBMX.LobbyCompatibility" Version="1.2.0" />
+    <PackageReference Include="LethalSettings" Version="1.4.0" Publicize="true" />
+    <Reference Include="plugins/MMHOOK_com.willis.lc.lethalsettings.dll">
+      <HintPath>../../../lib/MMHOOK/MMHOOK_com.willis.lc.lethalsettings.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Mirage/Compatibility/LethalSettings.fs" />
+    <Compile Include="Mirage/Compatibility/Main.fs" />
+    <Compile Include="Properties/AssemblyInfo.fs" />
+  </ItemGroup>
+</Project>

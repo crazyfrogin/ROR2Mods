@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Evaisa.NetcodePatcher.MSBuild" Version="4.4.2" />
+  <PropertyGroup>
+    <NetcodePatcherUnityVersion>2022.3.62</NetcodePatcherUnityVersion>
+    <NetcodePatcherNetcodeVersion>1.12.0</NetcodePatcherNetcodeVersion>
+    <NetcodePatcherTransportVersion>1.0.0</NetcodePatcherTransportVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <NetcodePatch Include="$(TargetPath)" />
+  </ItemGroup>
+  <PropertyGroup>
+    <LangVersion>9.0</LangVersion>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Mirage</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DebugType>embedded</DebugType>
+    <Optimize>true</Optimize>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=.</PathMap>
+    <Platform>x64</Platform>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../compatibility/Compatibility.fsproj" />
+    <ProjectReference Include="../../mirage-core/src/Mirage.fsproj" />
+    <ProjectReference Include="../../silero-vad/src/Silero.fsproj" />
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.Core" Version="5.4.21" />
+    <PackageReference Include="LethalCompany.GameLibs.Steam" Version="73.0.0-ngd.0" Publicize="true" />
+    <PackageReference Include="FSharpPlus" Version="1.6.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="LethalSettings" Version="1.4.0" Publicize="true" />
+    <PackageReference Include="TeamBMX.LobbyCompatibility" Version="1.2.0" />
+    <PackageReference Include="AinaVT-LethalConfig" Version="1.4.3" Publicize="true" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="OpusDotNet" Version="1.0.3" />
+    <Reference Include="Concentus.Oggfile.Fork">
+      <HintPath>../../../lib/Concentus.Oggfile/Concentus.Oggfile.Fork.dll</HintPath>
+    </Reference>
+    <Reference Include="MMHOOK_Unity.Netcode.Runtime">
+      <HintPath>../../../lib/MMHOOK/MMHOOK_Unity.Netcode.Runtime.dll</HintPath>
+    </Reference>
+    <Reference Include="MMHOOK_DissonanceVoip">
+      <HintPath>../../../lib/MMHOOK/MMHOOK_DissonanceVoip.dll</HintPath>
+    </Reference>
+    <Reference Include="MMHOOK_Assembly-CSharp">
+      <HintPath>../../../lib/MMHOOK/MMHOOK_Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="NAudio" Publicize="true">
+      <HintPath>../../../lib/NAudio/NAudio.dll</HintPath>
+    </Reference>
+    <Reference Include="NAudio.Core" Publicize="true">
+      <HintPath>../../../lib/NAudio/NAudio.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="NAudio.WinMM" Publicize="true">
+      <HintPath>../../../lib/NAudio/NAudio.WinMM.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Mirage/Domain/Null.fs" />
+    <Compile Include="Mirage/Domain/Netcode.fs" />
+    <Compile Include="Mirage/Domain/Logger.fs" />
+    <Compile Include="Mirage/Domain/Directory.fs" />
+    <Compile Include="Mirage/Domain/Setting.fs" />
+    <Compile Include="Mirage/Domain/Config.fs" />
+    <Compile Include="Mirage/Domain/Audio/Recording.fs" />
+    <Compile Include="Mirage/Domain/Audio/Packet.fs" />
+    <Compile Include="Mirage/Domain/Audio/Stream.fs" />
+    <Compile Include="Mirage/Domain/Audio/Sender.fs" />
+    <Compile Include="Mirage/Domain/Audio/Receiver.fs" />
+    <Compile Include="Mirage/Hook/PlayerControllerB.fs" />
+    <Compile Include="Mirage/Hook/Dissonance.fs" />
+    <Compile Include="Mirage/Hook/AudioSpatializer.fs" />
+    <Compile Include="Mirage/Hook/Config.fs" />
+    <Compile Include="Mirage/Unity/AudioStream.fs" />
+    <Compile Include="Mirage/Unity/MimicPlayer.fs" />
+    <Compile Include="Mirage/Unity/MimicVoice.fs" />
+    <Compile Include="Mirage/Hook/Item.fs" />
+    <Compile Include="Mirage/Unity/MaskedAnimator.fs" />
+    <Compile Include="Mirage/Hook/MaskedPlayerEnemy.fs" />
+    <Compile Include="Mirage/Hook/Prefab.fs" />
+    <Compile Include="Mirage/Hook/Microphone.fs" />
+    <Compile Include="Properties/AssemblyInfo.fs" />
+    <Compile Include="Mirage/Main.fs" />
+  </ItemGroup>
+</Project>

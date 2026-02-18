@@ -1,0 +1,4 @@
+lib/** linguist-vendored
+model/** linguist-vendored
+*.bat linguist-language=Batch
+*.c linguist-language=C

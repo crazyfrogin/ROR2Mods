@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Silero</RootNamespace>
+    <AssemblyName>SileroVAD</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DebugType>embedded</DebugType>
+    <Optimize>true</Optimize>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=.</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharpPlus" Version="1.6.1" />
+    <ContentWithTargetPath Include="../bin/SileroVAD.API.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>SileroVAD.API.dll</TargetPath>
+    </ContentWithTargetPath>
+    <ContentWithTargetPath Include="../../../lib/onnxruntime/lib/onnxruntime.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>onnxruntime.dll</TargetPath>
+    </ContentWithTargetPath>
+    <Content
+      Include="../../../model/silero-vad/**/*.*"
+      CopyToOutputDirectory="PreserveNewest"
+      TargetPath="%(RecursiveDir)%(Filename)%(Extension)"
+    />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Silero/Foreign.fs" />
+    <Compile Include="Silero/API.fs" />
+  </ItemGroup>
+</Project>

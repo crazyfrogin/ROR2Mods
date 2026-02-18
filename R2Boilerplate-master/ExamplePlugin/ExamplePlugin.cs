@@ -25,6 +25,7 @@ namespace ExamplePlugin
         private const string ArtifactDescriptionToken = "BOSSRUSH_ONE_HIT_WORLD_DESC";
 
         private static ArtifactDef _artifactDef;
+        private static BuffDef _overclockMarkerBuffDef;
 
         private readonly HashSet<CharacterMaster> _protectedBossMasters = new HashSet<CharacterMaster>();
         private bool _teleporterScaledThisStage;
@@ -46,6 +47,7 @@ namespace ExamplePlugin
             Log.Init(Logger);
 
             BindConfig();
+            RegisterOverclockMarkerBuff();
             RegisterArtifact();
             RegisterHooks();
 
@@ -76,6 +78,18 @@ namespace ExamplePlugin
             _blinkNoLineOfSightSeconds = Config.Bind("Blink", "NoLineOfSightSeconds", 1.0f, "Boss blink requires line-of-sight to be broken for this many seconds.");
             _blinkCooldownSeconds = Config.Bind("Blink", "CooldownSeconds", 10.0f, "Minimum time between boss blinks.");
             _blinkLandingOffset = Config.Bind("Blink", "LandingOffset", 8.0f, "How close the blink places bosses near the target.");
+        }
+
+        private void RegisterOverclockMarkerBuff()
+        {
+            _overclockMarkerBuffDef = ScriptableObject.CreateInstance<BuffDef>();
+            _overclockMarkerBuffDef.name = "BOSSRUSH_ONE_HIT_WORLD_OVERCLOCK_MARKER";
+            _overclockMarkerBuffDef.canStack = false;
+            _overclockMarkerBuffDef.isDebuff = false;
+            _overclockMarkerBuffDef.isCooldown = false;
+            _overclockMarkerBuffDef.iconSprite = Addressables.LoadAssetAsync<Sprite>("RoR2/Base/Common/MiscIcons/texMysteryIcon.png").WaitForCompletion();
+
+            ContentAddition.AddBuffDef(_overclockMarkerBuffDef);
         }
 
         private void RegisterArtifact()
@@ -232,8 +246,17 @@ namespace ExamplePlugin
                     }
 
                     tracker.Initialize(this);
+                    ApplyOverclockMarker(body);
                     body.RecalculateStats();
                     EnsureBodyAtFullHealth(body);
+
+                    // A short follow-up pass catches late stat updates from spawn initialization and keeps max/current health aligned.
+                    yield return new WaitForSeconds(0.25f);
+                    if (master && body == master.GetBody())
+                    {
+                        body.RecalculateStats();
+                        EnsureBodyAtFullHealth(body);
+                    }
 
                     Log.Info($"Applied Overclock to {body.GetDisplayName()}");
                     yield break;
@@ -323,9 +346,22 @@ namespace ExamplePlugin
             }
         }
 
+        private void ApplyOverclockMarker(CharacterBody body)
+        {
+            if (!NetworkServer.active || !body || !_overclockMarkerBuffDef)
+            {
+                return;
+            }
+
+            if (!body.HasBuff(_overclockMarkerBuffDef))
+            {
+                body.AddBuff(_overclockMarkerBuffDef);
+            }
+        }
+
         private static void EnsureBodyAtFullHealth(CharacterBody body)
         {
-            if (!body || !body.healthComponent)
+            if (!NetworkServer.active || !body || !body.healthComponent)
             {
                 return;
             }
@@ -444,7 +480,14 @@ namespace ExamplePlugin
         {
             orig(self);
 
-            if (!self || !self.TryGetComponent(out OverclockedBossTracker tracker) || !tracker.enabled)
+            if (!self)
+            {
+                return;
+            }
+
+            bool hasOverclockMarker = _overclockMarkerBuffDef && self.HasBuff(_overclockMarkerBuffDef);
+            bool hasTracker = self.TryGetComponent(out OverclockedBossTracker tracker) && tracker.enabled;
+            if (!hasOverclockMarker && !hasTracker)
             {
                 return;
             }

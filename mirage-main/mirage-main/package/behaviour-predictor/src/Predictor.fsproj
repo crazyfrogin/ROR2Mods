@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Predictor</RootNamespace>
+    <AssemblyName>Behaviour.Predictor</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Optimize>true</Optimize>
+    <DebugType>embedded</DebugType>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=.</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharpPlus" Version="1.6.1" />
+    <Reference Include="FSharpx.Async">
+      <HintPath>../../../lib/FSharpx.Async/FSharpx.Async.dll</HintPath>
+    </Reference>
+    <ProjectReference Include="../embedding/Embedding.fsproj" />
+    <ProjectReference Include="../../mirage-core/src/Mirage.fsproj" />
+    <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="MathNet.Numerics.FSharp" Version="5.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Predictor/Config.fs" />
+    <Compile Include="Predictor/DisposableAsync.fs" />
+    <Compile Include="Predictor/Domain.fs" />
+    <Compile Include="Predictor/DomainBytes.fs" />
+    <Compile Include="Predictor/Utilities.fs" />
+    <Compile Include="Predictor/EmitAction.fs" />
+    <Compile Include="Predictor/PolicyFileHandler.fs" />
+    <Compile Include="Predictor/Score.fs" />
+    <Compile Include="Predictor/ActionSelector.fs" />
+    <Compile Include="Predictor/PolicyController.fs" />
+    <Compile Include="Predictor/Model.fs" />
+    <Compile Include="Predictor/Observation.fs" />
+    <Compile Include="Predictor/MimicPool.fs" />
+    <Compile Include="Predictor/Learner.fs" />
+    <Compile Include="Predictor/Lib.fs" />
+  </ItemGroup>
+</Project>
