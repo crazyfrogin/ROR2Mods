@@ -85,9 +85,40 @@ namespace MuscleMemory
 
         internal bool TryGetAttributedSlot(PlayerProgressState state, float now, out SkillSlotKind slot, bool allowPrimaryFallback = false)
         {
-            if (state != null && now - state.LastActivatedTime <= Mathf.Max(0.1f, _config.AttributionWindowSeconds.Value))
+            slot = SkillSlotKind.Primary;
+            if (state == null)
             {
-                slot = state.LastActivatedSlot;
+                return allowPrimaryFallback;
+            }
+
+            float window = Mathf.Max(0.1f, _config.AttributionWindowSeconds.Value);
+
+            // Check non-Primary slots first — they should have priority because
+            // Primary fires near-constantly and would otherwise steal all attribution.
+            SkillSlotKind bestNonPrimary = SkillSlotKind.Primary;
+            float bestNonPrimaryTime = float.MinValue;
+
+            for (int i = 1; i < Constants.SlotCount; i++)
+            {
+                float t = state.Slots[i].LastActivatedTime;
+                if (now - t <= window && t > bestNonPrimaryTime)
+                {
+                    bestNonPrimary = (SkillSlotKind)i;
+                    bestNonPrimaryTime = t;
+                }
+            }
+
+            if (bestNonPrimary != SkillSlotKind.Primary)
+            {
+                slot = bestNonPrimary;
+                return true;
+            }
+
+            // No non-Primary slot was recently used — check Primary
+            float primaryTime = state.Slots[(int)SkillSlotKind.Primary].LastActivatedTime;
+            if (now - primaryTime <= window)
+            {
+                slot = SkillSlotKind.Primary;
                 return true;
             }
 
@@ -349,6 +380,14 @@ namespace MuscleMemory
             state.LastActivatedTime = now;
             state.Slots[(int)slot].LastActivatedTime = now;
 
+            // Grant flat activation XP so every skill use generates some progress,
+            // even for skills that deal no damage (utility dashes, shields, etc.).
+            float activationXp = Mathf.Max(0f, _config.ActivationFlatXp.Value);
+            if (activationXp > 0f)
+            {
+                AddProficiency(state, slot, activationXp);
+            }
+
             if (slot == SkillSlotKind.Utility)
             {
                 float flowDuration = Mathf.Max(0f, _config.UtilityFlowDurationSeconds.Value);
@@ -517,12 +556,21 @@ namespace MuscleMemory
 
             int previousStock = state.GetLastStock(slot);
             int currentStock = skill.stock;
+
+            // Stock-based detection is a FALLBACK only — the ExecuteIfReady hook is
+            // the authoritative source for skill activations.  We only trigger here
+            // if the hook somehow missed it (e.g. a skill that bypasses ExecuteIfReady).
             if (currentStock < previousStock)
             {
-                int activations = previousStock - currentStock;
-                for (int i = 0; i < activations; i++)
+                // Only fire if the hook didn't already handle this activation this frame.
+                float timeSinceSlotActivation = now - state.Slots[(int)slot].LastActivatedTime;
+                if (timeSinceSlotActivation > Time.fixedDeltaTime * 2f)
                 {
-                    OnSkillActivated(state, body, slot, now);
+                    int activations = previousStock - currentStock;
+                    for (int i = 0; i < activations; i++)
+                    {
+                        OnSkillActivated(state, body, slot, now);
+                    }
                 }
             }
 

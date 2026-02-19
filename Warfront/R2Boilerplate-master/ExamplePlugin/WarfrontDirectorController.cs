@@ -90,6 +90,8 @@ namespace WarfrontDirector
         private const float TeleporterFogRampDamageFractionPerSecond = 0.01f;
         private const float TeleporterFogMaxRampDamageFractionPerSecond = 0.09f;
 
+        private static readonly TeamIndex[] EnemyTeams = { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+
         private static readonly float[] SiegePulseIntervalScale = { 1f, 0.85f, 0.7f, 0.55f };
         private static readonly int[] SiegeSpawnCountBonus = { 0, 1, 2, 3 };
         private static readonly float[] SiegeBreatherScale = { 1f, 0.8f, 0.65f, 0.5f };
@@ -98,6 +100,7 @@ namespace WarfrontDirector
 
         private readonly List<WarfrontNode> _activeNodes = new List<WarfrontNode>();
         private readonly Dictionary<CombatDirector, DirectorDefaults> _directorDefaults = new Dictionary<CombatDirector, DirectorDefaults>();
+        private readonly List<CombatDirector> _staleDirectorKeys = new List<CombatDirector>();
         private readonly HashSet<WarWarning> _activeWarnings = new HashSet<WarWarning>();
         private readonly Dictionary<WarfrontRole, float> _stageRoleSignals = new Dictionary<WarfrontRole, float>();
         private readonly Dictionary<WarfrontRole, float> _runRoleThreatSignals = new Dictionary<WarfrontRole, float>();
@@ -108,6 +111,17 @@ namespace WarfrontDirector
         private readonly HashSet<int> _bossEnraged = new HashSet<int>();
         private readonly Dictionary<int, float> _teleporterFogExposureByMasterId = new Dictionary<int, float>();
         private readonly HashSet<int> _teleporterFogSeenPlayerMasterIds = new HashSet<int>();
+        private readonly List<int> _teleporterFogStaleKeys = new List<int>();
+
+        private static bool _voidFogEnumsCached;
+        private static bool _hasVoidFogDotMild;
+        private static bool _hasVoidFogDotStrong;
+        private static bool _hasVoidFogBuffMild;
+        private static bool _hasVoidFogBuffStrong;
+        private static DotController.DotIndex _cachedVoidFogDotMild;
+        private static DotController.DotIndex _cachedVoidFogDotStrong;
+        private static BuffIndex _cachedVoidFogBuffMild;
+        private static BuffIndex _cachedVoidFogBuffStrong;
 
         private bool _hooksInstalled;
         private bool _stageActive;
@@ -232,9 +246,8 @@ namespace WarfrontDirector
             if (NetworkServer.active)
             {
                 ServerFixedUpdate(Time.fixedDeltaTime);
+                BuildHudSnapshot();
             }
-
-            BuildHudSnapshot();
         }
 
         private void InstallHooks()
@@ -252,6 +265,7 @@ namespace WarfrontDirector
             TeleporterInteraction.onTeleporterFinishGlobal += OnTeleporterFinished;
             GlobalEventManager.onServerDamageDealt += OnServerDamageDealt;
             On.RoR2.GenericSkill.OnExecute += OnSkillExecuted;
+            On.RoR2.HealthComponent.Heal += OnHealthComponentHeal;
             NetworkManagerSystem.onStartClientGlobal += OnStartClient;
             NetworkManagerSystem.onStopClientGlobal += OnStopClient;
 
@@ -268,6 +282,7 @@ namespace WarfrontDirector
             TeleporterInteraction.onTeleporterFinishGlobal -= OnTeleporterFinished;
             GlobalEventManager.onServerDamageDealt -= OnServerDamageDealt;
             On.RoR2.GenericSkill.OnExecute -= OnSkillExecuted;
+            On.RoR2.HealthComponent.Heal -= OnHealthComponentHeal;
             NetworkManagerSystem.onStartClientGlobal -= OnStartClient;
             NetworkManagerSystem.onStopClientGlobal -= OnStopClient;
 
@@ -500,6 +515,24 @@ namespace WarfrontDirector
             }
 
             NotifyNearbyEnemiesCooldownExploit(body.corePosition, 30f);
+        }
+
+        private float OnHealthComponentHeal(On.RoR2.HealthComponent.orig_Heal orig, HealthComponent self, float amount, ProcChainMask procChainMask, bool nonRegen)
+        {
+            if (amount > 0f && self != null && self.body != null)
+            {
+                var master = self.body.master;
+                if (master != null)
+                {
+                    var rc = master.GetComponent<WarfrontRoleController>();
+                    if (rc != null && rc.IsCommander)
+                    {
+                        return 0f;
+                    }
+                }
+            }
+
+            return orig(self, amount, procChainMask, nonRegen);
         }
 
         private void ServerFixedUpdate(float deltaTime)
@@ -775,12 +808,18 @@ namespace WarfrontDirector
                 return;
             }
 
-            foreach (var masterId in _teleporterFogExposureByMasterId.Keys.ToArray())
+            _teleporterFogStaleKeys.Clear();
+            foreach (var masterId in _teleporterFogExposureByMasterId.Keys)
             {
                 if (!_teleporterFogSeenPlayerMasterIds.Contains(masterId))
                 {
-                    _teleporterFogExposureByMasterId.Remove(masterId);
+                    _teleporterFogStaleKeys.Add(masterId);
                 }
+            }
+
+            for (var i = 0; i < _teleporterFogStaleKeys.Count; i++)
+            {
+                _teleporterFogExposureByMasterId.Remove(_teleporterFogStaleKeys[i]);
             }
         }
 
@@ -863,29 +902,62 @@ namespace WarfrontDirector
             }
         }
 
+        private static void CacheVoidFogEnums()
+        {
+            if (_voidFogEnumsCached)
+            {
+                return;
+            }
+
+            _voidFogEnumsCached = true;
+
+            _hasVoidFogDotStrong = Enum.TryParse("VoidFogStrong", out _cachedVoidFogDotStrong);
+            _hasVoidFogDotMild = Enum.TryParse("VoidFogMild", out _cachedVoidFogDotMild);
+
+            if (!_hasVoidFogDotMild && !_hasVoidFogDotStrong)
+            {
+                foreach (var name in Enum.GetNames(typeof(DotController.DotIndex)))
+                {
+                    if (name.IndexOf("VoidFog", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        Enum.TryParse(name, out _cachedVoidFogDotMild))
+                    {
+                        _hasVoidFogDotMild = true;
+                        break;
+                    }
+                }
+            }
+
+            _hasVoidFogBuffStrong = Enum.TryParse("VoidFogStrong", out _cachedVoidFogBuffStrong);
+            _hasVoidFogBuffMild = Enum.TryParse("VoidFogMild", out _cachedVoidFogBuffMild);
+
+            if (!_hasVoidFogBuffMild && !_hasVoidFogBuffStrong)
+            {
+                foreach (var name in Enum.GetNames(typeof(BuffIndex)))
+                {
+                    if (name.IndexOf("VoidFog", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        Enum.TryParse(name, out _cachedVoidFogBuffMild))
+                    {
+                        _hasVoidFogBuffMild = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         private static bool TryResolveVoidFogDotIndex(bool preferStrong, out DotController.DotIndex dotIndex)
         {
-            if (preferStrong && Enum.TryParse("VoidFogStrong", out dotIndex))
+            CacheVoidFogEnums();
+
+            if (preferStrong && _hasVoidFogDotStrong)
             {
+                dotIndex = _cachedVoidFogDotStrong;
                 return true;
             }
 
-            if (Enum.TryParse("VoidFogMild", out dotIndex))
+            if (_hasVoidFogDotMild)
             {
+                dotIndex = _cachedVoidFogDotMild;
                 return true;
-            }
-
-            foreach (var name in Enum.GetNames(typeof(DotController.DotIndex)))
-            {
-                if (name.IndexOf("VoidFog", StringComparison.OrdinalIgnoreCase) < 0)
-                {
-                    continue;
-                }
-
-                if (Enum.TryParse(name, out dotIndex))
-                {
-                    return true;
-                }
             }
 
             dotIndex = default;
@@ -894,27 +966,18 @@ namespace WarfrontDirector
 
         private static bool TryResolveVoidFogBuffIndex(bool preferStrong, out BuffIndex buffIndex)
         {
-            if (preferStrong && Enum.TryParse("VoidFogStrong", out buffIndex))
+            CacheVoidFogEnums();
+
+            if (preferStrong && _hasVoidFogBuffStrong)
             {
+                buffIndex = _cachedVoidFogBuffStrong;
                 return true;
             }
 
-            if (Enum.TryParse("VoidFogMild", out buffIndex))
+            if (_hasVoidFogBuffMild)
             {
+                buffIndex = _cachedVoidFogBuffMild;
                 return true;
-            }
-
-            foreach (var name in Enum.GetNames(typeof(BuffIndex)))
-            {
-                if (name.IndexOf("VoidFog", StringComparison.OrdinalIgnoreCase) < 0)
-                {
-                    continue;
-                }
-
-                if (Enum.TryParse(name, out buffIndex))
-                {
-                    return true;
-                }
             }
 
             buffIndex = default;
@@ -1937,28 +2000,38 @@ namespace WarfrontDirector
 
         private bool IsPlayerTeamClumped()
         {
-            var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                .Select(m => m ? m.body : null)
-                .Where(b => b != null && b.healthComponent != null && b.healthComponent.alive)
-                .ToList();
+            var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            var center = Vector3.zero;
+            var playerCount = 0;
+            foreach (var member in members)
+            {
+                var b = member ? member.body : null;
+                if (b == null || b.healthComponent == null || !b.healthComponent.alive)
+                {
+                    continue;
+                }
 
-            if (players.Count <= 1)
+                center += b.corePosition;
+                playerCount++;
+            }
+
+            if (playerCount <= 1)
             {
                 return true;
             }
 
-            var center = Vector3.zero;
-            foreach (var p in players)
-            {
-                center += p.corePosition;
-            }
-
-            center /= players.Count;
+            center /= playerCount;
 
             var maxDistSqr = 0f;
-            foreach (var p in players)
+            foreach (var member in members)
             {
-                var distSqr = (p.corePosition - center).sqrMagnitude;
+                var b = member ? member.body : null;
+                if (b == null || b.healthComponent == null || !b.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                var distSqr = (b.corePosition - center).sqrMagnitude;
                 if (distSqr > maxDistSqr)
                 {
                     maxDistSqr = distSqr;
@@ -1971,7 +2044,7 @@ namespace WarfrontDirector
         private void BoostNearbyMonsterMovement(Vector3 origin, float radius, float boostMultiplier, float duration)
         {
             var radiusSqr = radius * radius;
-            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            var teams = EnemyTeams;
             foreach (var teamIndex in teams)
             {
                 var members = TeamComponent.GetTeamMembers(teamIndex);
@@ -2352,12 +2425,13 @@ namespace WarfrontDirector
 
         private void SetDirectorCadence(bool assault, bool recon)
         {
-            foreach (var pair in _directorDefaults.ToArray())
+            _staleDirectorKeys.Clear();
+            foreach (var pair in _directorDefaults)
             {
                 var director = pair.Key;
                 if (!director)
                 {
-                    _directorDefaults.Remove(pair.Key);
+                    _staleDirectorKeys.Add(pair.Key);
                     continue;
                 }
 
@@ -2527,16 +2601,22 @@ namespace WarfrontDirector
                     director.eliteBias = defaults.EliteBias;
                 }
             }
+
+            for (var i = 0; i < _staleDirectorKeys.Count; i++)
+            {
+                _directorDefaults.Remove(_staleDirectorKeys[i]);
+            }
         }
 
         private void SetDirectorCadenceWavePause()
         {
-            foreach (var pair in _directorDefaults.ToArray())
+            _staleDirectorKeys.Clear();
+            foreach (var pair in _directorDefaults)
             {
                 var director = pair.Key;
                 if (!director)
                 {
-                    _directorDefaults.Remove(pair.Key);
+                    _staleDirectorKeys.Add(pair.Key);
                     continue;
                 }
 
@@ -2545,6 +2625,11 @@ namespace WarfrontDirector
                 director.minSeriesSpawnInterval = Mathf.Max(defaults.MinSeriesSpawnInterval * 2.8f, 14f);
                 director.maxSeriesSpawnInterval = Mathf.Max(defaults.MaxSeriesSpawnInterval * 3.2f, 18f);
                 director.eliteBias = defaults.EliteBias;
+            }
+
+            for (var i = 0; i < _staleDirectorKeys.Count; i++)
+            {
+                _directorDefaults.Remove(_staleDirectorKeys[i]);
             }
         }
 
@@ -2568,7 +2653,7 @@ namespace WarfrontDirector
 
         private void CleanupNodes()
         {
-            foreach (var node in _activeNodes.ToArray())
+            foreach (var node in _activeNodes)
             {
                 if (!node)
                 {
@@ -2656,7 +2741,7 @@ namespace WarfrontDirector
                 return;
             }
 
-            _networkSyncTimer = 0.2f;
+            _networkSyncTimer = 1.0f;
 
             var message = new WarfrontStateMessage
             {
@@ -2879,7 +2964,15 @@ namespace WarfrontDirector
                 }
             }
 
-            return WarningPool.FirstOrDefault(w => !exclude.HasValue || w != exclude.Value);
+            for (var j = 0; j < WarningPool.Length; j++)
+            {
+                if (!exclude.HasValue || WarningPool[j] != exclude.Value)
+                {
+                    return WarningPool[j];
+                }
+            }
+
+            return WarningPool[0];
         }
 
         private WarAnomaly RollAnomaly(WarfrontDoctrineProfile doctrine)
@@ -3199,7 +3292,6 @@ namespace WarfrontDirector
             if (body != null)
             {
                 body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 14f + GetDifficultyTier() * 2f);
-                body.healthComponent?.HealFraction(0.12f, default);
             }
 
             if (master.inventory == null)
@@ -3214,7 +3306,6 @@ namespace WarfrontDirector
             master.inventory.GiveItem(RoR2Content.Items.BoostHp, hpStacks);
             master.inventory.GiveItem(RoR2Content.Items.BoostDamage, dmgStacks);
             master.inventory.GiveItem(RoR2Content.Items.AdaptiveArmor, 1);
-            master.inventory.GiveItem(RoR2Content.Items.Knurl, 2 + diffTier);
 
             var eliteIndex = PickCuratedCommanderElite(nodeType);
             if (eliteIndex == EliteIndex.None)
@@ -3394,7 +3485,7 @@ namespace WarfrontDirector
 
         private void TickBossPhases()
         {
-            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            var teams = EnemyTeams;
             foreach (var teamIndex in teams)
             {
                 var members = TeamComponent.GetTeamMembers(teamIndex);
@@ -3885,23 +3976,44 @@ namespace WarfrontDirector
                 return isolated;
             }
 
-            var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                .Select(member => member ? member.body : null)
-                .Where(IsValidSquadTarget)
-                .ToList();
+            var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            CharacterBody weakest = null;
+            var weakestFraction = float.MaxValue;
+            var playerCount = 0;
+            CharacterBody randomFallback = null;
 
-            if (players.Count == 0)
+            foreach (var member in members)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                playerCount++;
+                if (body.healthComponent.combinedHealthFraction < weakestFraction)
+                {
+                    weakestFraction = body.healthComponent.combinedHealthFraction;
+                    weakest = body;
+                }
+
+                if (UnityEngine.Random.Range(0, playerCount) == 0)
+                {
+                    randomFallback = body;
+                }
+            }
+
+            if (playerCount == 0)
             {
                 return null;
             }
 
-            players.Sort((a, b) => a.healthComponent.combinedHealthFraction.CompareTo(b.healthComponent.combinedHealthFraction));
-            if (players[0].healthComponent.combinedHealthFraction < 0.55f)
+            if (weakest != null && weakestFraction < 0.55f)
             {
-                return players[0];
+                return weakest;
             }
 
-            return players[UnityEngine.Random.Range(0, players.Count)];
+            return randomFallback ?? weakest;
         }
 
         private static bool IsValidSquadTarget(CharacterBody body)
@@ -4088,19 +4200,31 @@ namespace WarfrontDirector
 
         internal CharacterBody GetPeelerPriorityTargetForAI()
         {
-            var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                .Select(member => member ? member.body : null)
-                .Where(IsValidSquadTarget)
-                .ToList();
+            var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            CharacterBody weakest = null;
+            var weakestFraction = float.MaxValue;
 
-            if (players.Count == 0)
+            foreach (var member in members)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                if (body.healthComponent.combinedHealthFraction < weakestFraction)
+                {
+                    weakestFraction = body.healthComponent.combinedHealthFraction;
+                    weakest = body;
+                }
+            }
+
+            if (weakest == null)
             {
                 return null;
             }
 
-            players.Sort((a, b) => a.healthComponent.combinedHealthFraction.CompareTo(b.healthComponent.combinedHealthFraction));
-            var weakest = players[0];
-            if (weakest.healthComponent.combinedHealthFraction < 0.65f)
+            if (weakestFraction < 0.65f)
             {
                 return weakest;
             }
@@ -4135,7 +4259,7 @@ namespace WarfrontDirector
         private void NotifyNearbyEnemiesCooldownExploit(Vector3 origin, float radius)
         {
             var radiusSqr = radius * radius;
-            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            var teams = EnemyTeams;
             foreach (var teamIndex in teams)
             {
                 var members = TeamComponent.GetTeamMembers(teamIndex);
@@ -4171,7 +4295,7 @@ namespace WarfrontDirector
         {
             var radiusSqr = radius * radius;
             var count = 0;
-            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            var teams = EnemyTeams;
             foreach (var teamIndex in teams)
             {
                 var members = TeamComponent.GetTeamMembers(teamIndex);
@@ -4248,7 +4372,7 @@ namespace WarfrontDirector
             var radiusSqr = radius * radius;
             var total = Vector3.zero;
             var count = 0;
-            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            var teams = EnemyTeams;
             foreach (var teamIndex in teams)
             {
                 var members = TeamComponent.GetTeamMembers(teamIndex);
@@ -4607,20 +4731,24 @@ namespace WarfrontDirector
 
         private CharacterBody GetMostIsolatedPlayer()
         {
-            var members = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                .Select(m => m ? m.body : null)
-                .Where(b => b != null && b.healthComponent != null && b.healthComponent.alive)
-                .ToList();
+            var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
 
             CharacterBody isolated = null;
             var isolatedDistance = -1f;
 
-            foreach (var body in members)
+            foreach (var member in members)
             {
-                var nearest = float.MaxValue;
-                foreach (var other in members)
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
                 {
-                    if (other == body)
+                    continue;
+                }
+
+                var nearest = float.MaxValue;
+                foreach (var otherMember in members)
+                {
+                    var other = otherMember ? otherMember.body : null;
+                    if (other == null || other == body || other.healthComponent == null || !other.healthComponent.alive)
                     {
                         continue;
                     }

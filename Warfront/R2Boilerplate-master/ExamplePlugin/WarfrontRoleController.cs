@@ -1,4 +1,3 @@
-using System.Linq;
 using RoR2;
 using RoR2.CharacterAI;
 using UnityEngine;
@@ -65,6 +64,7 @@ namespace WarfrontDirector
         private bool _bossIsEnraged;
 
         internal WarfrontRole AssignedRole => _assignedRole;
+        internal bool IsCommander => _isCommander;
 
         internal void Initialize(WarfrontDirectorController owner, CharacterMaster master, WarfrontRole role, WarfrontDoctrineProfile doctrine, bool isCommander = false, bool isBoss = false)
         {
@@ -250,7 +250,7 @@ namespace WarfrontDirector
             foreach (var member in players)
             {
                 var playerBody = member ? member.body : null;
-                if (playerBody == null || playerBody.healthComponent == null || !playerBody.healthComponent.alive)
+                if (!IsPlayerBody(playerBody))
                 {
                     continue;
                 }
@@ -290,6 +290,27 @@ namespace WarfrontDirector
             }
 
             return best;
+        }
+
+        private static bool IsPlayerBody(CharacterBody body)
+        {
+            if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+            {
+                return false;
+            }
+
+            if (body.isPlayerControlled)
+            {
+                return true;
+            }
+
+            var master = body.master;
+            if (master != null && master.playerCharacterMasterController != null)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private void TickBossDodge(CharacterBody body, float deltaTime)
@@ -561,29 +582,51 @@ namespace WarfrontDirector
 
         private CharacterBody SelectArtilleryTarget(CharacterBody self)
         {
-            var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                .Select(m => m ? m.body : null)
-                .Where(b => b != null && b.healthComponent != null && b.healthComponent.alive)
-                .ToList();
+            var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            var playerCount = 0;
+            CharacterBody singlePlayer = null;
 
-            if (players.Count == 0)
+            foreach (var member in members)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                playerCount++;
+                singlePlayer = body;
+            }
+
+            if (playerCount == 0)
             {
                 return null;
             }
 
-            if (players.Count == 1)
+            if (playerCount == 1)
             {
-                return players[0];
+                return singlePlayer;
             }
 
             CharacterBody best = null;
             var bestNeighborCount = -1;
-            foreach (var player in players)
+            foreach (var member in members)
             {
-                var neighborCount = 0;
-                foreach (var other in players)
+                var player = member ? member.body : null;
+                if (player == null || player.healthComponent == null || !player.healthComponent.alive)
                 {
-                    if (other == player) continue;
+                    continue;
+                }
+
+                var neighborCount = 0;
+                foreach (var otherMember in members)
+                {
+                    var other = otherMember ? otherMember.body : null;
+                    if (other == null || other == player || other.healthComponent == null || !other.healthComponent.alive)
+                    {
+                        continue;
+                    }
+
                     if ((other.corePosition - player.corePosition).sqrMagnitude < 15f * 15f)
                     {
                         neighborCount++;
@@ -916,25 +959,35 @@ namespace WarfrontDirector
 
             if (_assignedRole == WarfrontRole.Contester || _assignedRole == WarfrontRole.Peeler)
             {
-                var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
-                    .Select(m => m ? m.body : null)
-                    .Where(b => b != null && b.healthComponent != null && b.healthComponent.alive)
-                    .ToList();
-
-                if (players.Count > 1)
+                var members = TeamComponent.GetTeamMembers(TeamIndex.Player);
+                var center = Vector3.zero;
+                var playerCount = 0;
+                foreach (var member in members)
                 {
-                    var center = Vector3.zero;
-                    foreach (var p in players)
+                    var b = member ? member.body : null;
+                    if (b == null || b.healthComponent == null || !b.healthComponent.alive)
                     {
-                        center += p.corePosition;
+                        continue;
                     }
 
-                    center /= players.Count;
+                    center += b.corePosition;
+                    playerCount++;
+                }
+
+                if (playerCount > 1)
+                {
+                    center /= playerCount;
 
                     var allClumped = true;
-                    foreach (var p in players)
+                    foreach (var member in members)
                     {
-                        if ((p.corePosition - center).sqrMagnitude > 12f * 12f)
+                        var b = member ? member.body : null;
+                        if (b == null || b.healthComponent == null || !b.healthComponent.alive)
+                        {
+                            continue;
+                        }
+
+                        if ((b.corePosition - center).sqrMagnitude > 12f * 12f)
                         {
                             allClumped = false;
                             break;

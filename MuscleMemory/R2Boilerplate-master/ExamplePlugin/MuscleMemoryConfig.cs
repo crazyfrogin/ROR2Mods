@@ -20,6 +20,7 @@ namespace MuscleMemory
         internal ConfigEntry<float> UtilityDistanceWindowSeconds;
         internal ConfigEntry<float> SurvivorScalingMultiplier;
         internal ConfigEntry<bool> SplitUnattributedXp;
+        internal ConfigEntry<float> ActivationFlatXp;
 
         // Bonuses
         internal ConfigEntry<float> PrimaryDamagePerLevel;
@@ -118,8 +119,10 @@ namespace MuscleMemory
                 "Window after utility activation where movement grants utility proficiency.");
             SurvivorScalingMultiplier = config.Bind("Progression", "SurvivorScalingMultiplier", 1f,
                 "Global multiplier applied to all proficiency gains. Adjust per-profile to tune for different survivors.");
-            SplitUnattributedXp = config.Bind("Progression", "SplitUnattributedXp", true,
+            SplitUnattributedXp = config.Bind("Progression", "SplitUnattributedXp", false,
                 "When true, damage that cannot be attributed to any recently-used skill is split evenly across all slots. When false, it defaults to Primary.");
+            ActivationFlatXp = config.Bind("Progression", "ActivationFlatXp", 0.5f,
+                "Flat proficiency granted each time a skill is activated, so skills that deal no damage (utility dashes, shields) still progress.");
 
             // Bonuses
             PrimaryDamagePerLevel = config.Bind("Bonuses", "PrimaryDamagePerLevel", 0.01f,
