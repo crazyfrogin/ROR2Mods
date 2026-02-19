@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using RoR2;
+using RoR2.UI;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -32,6 +34,10 @@ namespace ExamplePlugin
         private bool _clientHandlerRegistered;
 
         private ConfigEntry<double> _levelCurveK;
+        private ConfigEntry<int> _curveEaseUntilLevel;
+        private ConfigEntry<float> _curveEarlyEaseMultiplier;
+        private ConfigEntry<int> _curveHardeningStartLevel;
+        private ConfigEntry<float> _curveHardeningPerLevel;
         private ConfigEntry<int> _lowLevelEaseUntil;
         private ConfigEntry<float> _lowLevelXpMultiplier;
         private ConfigEntry<float> _attributionWindowSeconds;
@@ -240,25 +246,212 @@ namespace ExamplePlugin
                 return;
             }
 
-            if (!TryGetEffectiveLevels(localBody, out int primary, out int secondary, out int utility, out int special, out bool flowActive))
+            if (!TryGetEffectiveLevels(localBody, out int primary, out int secondary, out int utility, out int special, out _))
+            {
+                return;
+            }
+
+            if (!TryGetSkillIconRects(localBody, out Rect primaryIconRect, out Rect secondaryIconRect, out Rect utilityIconRect, out Rect specialIconRect))
             {
                 return;
             }
 
             float scale = Mathf.Clamp(_skillHudScale.Value, 0.75f, 2f);
-            float width = 228f * scale;
-            float height = 86f * scale;
-            float x = Screen.width - width - (18f * scale);
-            float y = Screen.height - height - (102f * scale);
+            GUIStyle style = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                fontSize = Mathf.RoundToInt(16f * scale)
+            };
+            style.normal.textColor = Color.white;
 
-            Color previousColor = GUI.color;
-            GUI.color = new Color(0f, 0f, 0f, 0.55f);
-            GUI.Box(new Rect(x, y, width, height), GUIContent.none);
-            GUI.color = previousColor;
+            DrawLevelAboveSkill(primaryIconRect, primary, scale, style);
+            DrawLevelAboveSkill(secondaryIconRect, secondary, scale, style);
+            DrawLevelAboveSkill(utilityIconRect, utility, scale, style);
+            DrawLevelAboveSkill(specialIconRect, special, scale, style);
+        }
 
-            GUI.Label(new Rect(x + (8f * scale), y + (6f * scale), width, 18f * scale), $"P {primary}   S {secondary}   U {utility}   Sp {special}");
-            GUI.Label(new Rect(x + (8f * scale), y + (26f * scale), width, 18f * scale), $"Flow: {(flowActive ? "ON" : "OFF")}");
-            GUI.Label(new Rect(x + (8f * scale), y + (46f * scale), width, 18f * scale), BuildMilestoneStatusLine(primary, secondary, utility, special));
+        private static void DrawLevelAboveSkill(Rect iconRect, int level, float scale, GUIStyle style)
+        {
+            float labelHeight = Mathf.Clamp(iconRect.height * 0.5f, 14f * scale, 24f * scale);
+            float gapAboveIcon = Mathf.Max(24f * scale, iconRect.height * 0.6f);
+            float labelY = Mathf.Max(0f, iconRect.y - labelHeight - gapAboveIcon);
+            Rect labelRect = new Rect(iconRect.x, labelY, iconRect.width, labelHeight);
+            DrawSkillLevelLabel(labelRect, level.ToString(), style);
+        }
+
+        private static bool TryGetSkillIconRects(CharacterBody localBody, out Rect primaryRect, out Rect secondaryRect, out Rect utilityRect, out Rect specialRect)
+        {
+            primaryRect = default;
+            secondaryRect = default;
+            utilityRect = default;
+            specialRect = default;
+
+            if (localBody == null)
+            {
+                return false;
+            }
+
+            HUD localHud = null;
+            for (int i = 0; i < HUD.readOnlyInstanceList.Count; i++)
+            {
+                HUD candidate = HUD.readOnlyInstanceList[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (candidate.targetBodyObject == localBody.gameObject)
+                {
+                    localHud = candidate;
+                    break;
+                }
+            }
+
+            if (localHud == null)
+            {
+                return false;
+            }
+
+            SkillIcon[] allSkillIcons = localHud.GetComponentsInChildren<SkillIcon>(true);
+            if (allSkillIcons == null || allSkillIcons.Length == 0)
+            {
+                return false;
+            }
+
+            SkillLocator skillLocator = localBody.skillLocator;
+            bool foundPrimary = false;
+            bool foundSecondary = false;
+            bool foundUtility = false;
+            bool foundSpecial = false;
+
+            List<Rect> visibleIconRects = new List<Rect>(allSkillIcons.Length);
+            for (int i = 0; i < allSkillIcons.Length; i++)
+            {
+                SkillIcon icon = allSkillIcons[i];
+                if (icon == null || !icon.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                RectTransform rectTransform = icon.transform as RectTransform;
+                if (!TryConvertRectTransformToScreenRect(rectTransform, out Rect iconRect))
+                {
+                    continue;
+                }
+
+                if (iconRect.width < 18f || iconRect.height < 18f)
+                {
+                    continue;
+                }
+
+                visibleIconRects.Add(iconRect);
+
+                GenericSkill targetSkill = TryGetIconTargetSkill(icon);
+                if (targetSkill == null || skillLocator == null)
+                {
+                    continue;
+                }
+
+                if (!foundPrimary && targetSkill == skillLocator.primary)
+                {
+                    primaryRect = iconRect;
+                    foundPrimary = true;
+                    continue;
+                }
+
+                if (!foundSecondary && targetSkill == skillLocator.secondary)
+                {
+                    secondaryRect = iconRect;
+                    foundSecondary = true;
+                    continue;
+                }
+
+                if (!foundUtility && targetSkill == skillLocator.utility)
+                {
+                    utilityRect = iconRect;
+                    foundUtility = true;
+                    continue;
+                }
+
+                if (!foundSpecial && targetSkill == skillLocator.special)
+                {
+                    specialRect = iconRect;
+                    foundSpecial = true;
+                }
+            }
+
+            if (foundPrimary && foundSecondary && foundUtility && foundSpecial)
+            {
+                return true;
+            }
+
+            if (visibleIconRects.Count < SlotCount)
+            {
+                return false;
+            }
+
+            visibleIconRects.Sort((a, b) => a.x.CompareTo(b.x));
+            int startIndex = visibleIconRects.Count - SlotCount;
+
+            primaryRect = visibleIconRects[startIndex];
+            secondaryRect = visibleIconRects[startIndex + 1];
+            utilityRect = visibleIconRects[startIndex + 2];
+            specialRect = visibleIconRects[startIndex + 3];
+            return true;
+        }
+
+        private static GenericSkill TryGetIconTargetSkill(SkillIcon icon)
+        {
+            if (icon == null)
+            {
+                return null;
+            }
+
+            Type iconType = icon.GetType();
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            FieldInfo targetSkillField = iconType.GetField("targetSkill", flags);
+            if (targetSkillField != null)
+            {
+                return targetSkillField.GetValue(icon) as GenericSkill;
+            }
+
+            PropertyInfo targetSkillProperty = iconType.GetProperty("targetSkill", flags);
+            if (targetSkillProperty != null)
+            {
+                return targetSkillProperty.GetValue(icon, null) as GenericSkill;
+            }
+
+            return null;
+        }
+
+        private static bool TryConvertRectTransformToScreenRect(RectTransform rectTransform, out Rect screenRect)
+        {
+            screenRect = default;
+            if (rectTransform == null)
+            {
+                return false;
+            }
+
+            Vector3[] corners = new Vector3[4];
+            rectTransform.GetWorldCorners(corners);
+
+            Canvas parentCanvas = rectTransform.GetComponentInParent<Canvas>();
+            Camera uiCamera = parentCanvas != null ? parentCanvas.worldCamera : null;
+
+            Vector2 bottomLeft = RectTransformUtility.WorldToScreenPoint(uiCamera, corners[0]);
+            Vector2 topRight = RectTransformUtility.WorldToScreenPoint(uiCamera, corners[2]);
+
+            float width = topRight.x - bottomLeft.x;
+            float height = topRight.y - bottomLeft.y;
+            if (width <= 0f || height <= 0f)
+            {
+                return false;
+            }
+
+            screenRect = new Rect(bottomLeft.x, Screen.height - topRight.y, width, height);
+            return true;
         }
 
         private static CharacterBody TryGetLocalBody()
@@ -282,18 +475,24 @@ namespace ExamplePlugin
             return null;
         }
 
-        private string BuildMilestoneStatusLine(int primary, int secondary, int utility, int special)
+        private static void DrawSkillLevelLabel(Rect rect, string text, GUIStyle style)
         {
-            string primaryStatus = primary >= Math.Max(1, _primaryBleedMilestoneLevel.Value) ? "P★" : "P-";
-            string secondaryStatus = secondary >= Math.Max(1, _secondaryCooldownMilestoneLevel.Value) ? "S★" : "S-";
-            string utilityStatus = utility >= Math.Max(1, _utilityFlowMilestoneLevel.Value) ? "U★" : "U-";
-            string specialStatus = special >= Math.Max(1, _specialBarrierMilestoneLevel.Value) ? "Sp★" : "Sp-";
-            return $"Milestones: {primaryStatus} {secondaryStatus} {utilityStatus} {specialStatus}";
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, 0.9f);
+            GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), text, style);
+
+            GUI.color = Color.white;
+            GUI.Label(rect, text, style);
+            GUI.color = previousColor;
         }
 
         private void BindConfig()
         {
-            _levelCurveK = Config.Bind("Progression", "LevelCurveK", 60d, "K in Level = floor(log2(1 + P / K)). Higher K slows leveling.");
+            _levelCurveK = Config.Bind("Progression", "LevelCurveK", 60d, "Base K for proficiency requirements. Lower K makes leveling easier.");
+            _curveEaseUntilLevel = Config.Bind("Progression", "CurveEaseUntilLevel", 6, "Required proficiency is reduced for levels up to this level.");
+            _curveEarlyEaseMultiplier = Config.Bind("Progression", "CurveEarlyEaseMultiplier", 0.8f, "Multiplier applied to required proficiency for early levels. Lower values are easier.");
+            _curveHardeningStartLevel = Config.Bind("Progression", "CurveHardeningStartLevel", 8, "After this level, each next level requires additional proficiency growth.");
+            _curveHardeningPerLevel = Config.Bind("Progression", "CurveHardeningPerLevel", 0.06f, "Additional requirement per level above CurveHardeningStartLevel.");
             _lowLevelEaseUntil = Config.Bind("Progression", "LowLevelEaseUntil", 4, "Slots below this level gain boosted proficiency to speed up early leveling.");
             _lowLevelXpMultiplier = Config.Bind("Progression", "LowLevelXpMultiplier", 1.5f, "Proficiency multiplier applied while a slot is below LowLevelEaseUntil.");
             _attributionWindowSeconds = Config.Bind("Progression", "AttributionWindowSeconds", 2.5f, "Skill output attribution window after a slot activation.");
@@ -721,7 +920,7 @@ namespace ExamplePlugin
             }
         }
 
-        private bool TryGetAttributedSlot(PlayerProgressState state, float now, out SkillSlotKind slot)
+        private bool TryGetAttributedSlot(PlayerProgressState state, float now, out SkillSlotKind slot, bool allowPrimaryFallback = false)
         {
             if (state != null && now - state.LastActivatedTime <= Mathf.Max(0.1f, _attributionWindowSeconds.Value))
             {
@@ -730,7 +929,7 @@ namespace ExamplePlugin
             }
 
             slot = SkillSlotKind.Primary;
-            return false;
+            return allowPrimaryFallback;
         }
 
         private void GlobalEventManager_OnHitEnemy(On.RoR2.GlobalEventManager.orig_OnHitEnemy orig, GlobalEventManager self, DamageInfo damageInfo, GameObject victim)
@@ -748,7 +947,7 @@ namespace ExamplePlugin
                 return;
             }
 
-            if (!TryGetAttributedSlot(state, Time.fixedTime, out SkillSlotKind slot))
+            if (!TryGetAttributedSlot(state, Time.fixedTime, out SkillSlotKind slot, allowPrimaryFallback: true))
             {
                 return;
             }
@@ -913,8 +1112,40 @@ namespace ExamplePlugin
                 return 0;
             }
 
+            const int maxEvaluatedLevel = 512;
+            for (int targetLevel = 1; targetLevel <= maxEvaluatedLevel; targetLevel++)
+            {
+                if (proficiency < GetRequiredProficiencyForLevel(targetLevel))
+                {
+                    return targetLevel - 1;
+                }
+            }
+
+            return maxEvaluatedLevel;
+        }
+
+        private double GetRequiredProficiencyForLevel(int targetLevel)
+        {
+            int safeLevel = Math.Max(1, targetLevel);
             double k = Math.Max(1d, _levelCurveK.Value);
-            return Math.Max(0, (int)Math.Floor(Math.Log(1d + (proficiency / k), 2d)));
+            double requirement = k * (Math.Pow(2d, safeLevel) - 1d);
+
+            int easeUntilLevel = Math.Max(0, _curveEaseUntilLevel.Value);
+            if (safeLevel <= easeUntilLevel)
+            {
+                double easeMultiplier = Math.Min(1d, Math.Max(0.1d, _curveEarlyEaseMultiplier.Value));
+                requirement *= easeMultiplier;
+            }
+
+            int hardeningStartLevel = Math.Max(0, _curveHardeningStartLevel.Value);
+            if (safeLevel > hardeningStartLevel)
+            {
+                double hardeningPerLevel = Math.Max(0d, _curveHardeningPerLevel.Value);
+                double levelsPastStart = safeLevel - hardeningStartLevel;
+                requirement *= 1d + (levelsPastStart * hardeningPerLevel);
+            }
+
+            return Math.Max(0d, requirement);
         }
 
         private void CharacterBody_RecalculateStats(On.RoR2.CharacterBody.orig_RecalculateStats orig, CharacterBody self)
@@ -949,7 +1180,7 @@ namespace ExamplePlugin
             {
                 CharacterBody attackerBody = damageInfo.attacker.GetComponent<CharacterBody>();
                 if (TryGetTrackedState(attackerBody, out PlayerProgressState state)
-                    && TryGetAttributedSlot(state, Time.fixedTime, out SkillSlotKind slot)
+                    && TryGetAttributedSlot(state, Time.fixedTime, out SkillSlotKind slot, allowPrimaryFallback: true)
                     && slot == SkillSlotKind.Primary)
                 {
                     int primaryLevel = state.Slots[(int)SkillSlotKind.Primary].Level;

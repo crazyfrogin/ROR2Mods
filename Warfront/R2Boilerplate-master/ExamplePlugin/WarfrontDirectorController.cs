@@ -52,7 +52,15 @@ namespace WarfrontDirector
             "BLAZING",
             "GLACIAL",
             "OVERLOADING",
-            "MENDING"
+            "MENDING",
+            "AFFIXRED",
+            "AFFIXBLUE",
+            "AFFIXWHITE",
+            "AFFIXPOISON",
+            "EDFIRE",
+            "EDICE",
+            "EDLIGHTNING",
+            "EDPOISON"
         };
 
         private static readonly WarfrontRole[] RoleRotation =
@@ -99,6 +107,9 @@ namespace WarfrontDirector
         private bool _breachActive;
         private bool _falseLullPending;
         private bool _silentMinuteFinished;
+        private bool _teleporterBossObservedAlive;
+        private bool _postBossKillRespitesEnabled;
+        private bool _postBossWaveActive;
 
         private float _stageStopwatch;
         private float _windowTimer;
@@ -148,6 +159,8 @@ namespace WarfrontDirector
         private float _eventBuffMagnitude;
         private float _hunterSquadTargetTimer;
         private float _bossChallengeScanTimer;
+        private float _postBossKillRespiteTimer;
+        private float _postBossKillRespiteCycleTimer;
         private float _pausedTeleporterCharge;
         private float _teleporterFogTickTimer;
         private CharacterBody _hunterSquadTarget;
@@ -350,6 +363,11 @@ namespace WarfrontDirector
             _rollbackImmunityTimer = 0f;
             _rollbackUsedThisAssault = 0f;
             _lastAlivePlayerCount = GetAlivePlayerCount();
+            _teleporterBossObservedAlive = false;
+            _postBossKillRespitesEnabled = false;
+            _postBossWaveActive = false;
+            _postBossKillRespiteTimer = 0f;
+            _postBossKillRespiteCycleTimer = 0f;
 
             BeginBreather(initial: true);
             SpawnTeleporterCommanders();
@@ -372,6 +390,11 @@ namespace WarfrontDirector
             _teleporterFogTickTimer = 0f;
             _teleporterFogExposureByMasterId.Clear();
             _teleporterFogSeenPlayerMasterIds.Clear();
+            _teleporterBossObservedAlive = false;
+            _postBossKillRespitesEnabled = false;
+            _postBossWaveActive = false;
+            _postBossKillRespiteTimer = 0f;
+            _postBossKillRespiteCycleTimer = 0f;
             SetDirectorCadence(assault: false, recon: false);
         }
 
@@ -391,6 +414,11 @@ namespace WarfrontDirector
             _teleporterFogTickTimer = 0f;
             _teleporterFogExposureByMasterId.Clear();
             _teleporterFogSeenPlayerMasterIds.Clear();
+            _teleporterBossObservedAlive = false;
+            _postBossKillRespitesEnabled = false;
+            _postBossWaveActive = false;
+            _postBossKillRespiteTimer = 0f;
+            _postBossKillRespiteCycleTimer = 0f;
             SetDirectorCadence(assault: false, recon: false);
             CommitStageAdaptationSignals();
             ResetRunState(clearNodes: true, restoreDirectors: true);
@@ -435,6 +463,7 @@ namespace WarfrontDirector
             TickEventBuffWindow(deltaTime);
             TickHunterSquadTarget(deltaTime);
             TickBossChallengeBuffs(deltaTime);
+            TickPostBossRespite(deltaTime);
 
             if (_rollbackImmunityTimer > 0f)
             {
@@ -514,6 +543,17 @@ namespace WarfrontDirector
 
             if (_teleporter == null || !_teleporter.isCharging || _teleporter.isCharged)
             {
+                return;
+            }
+
+            if (_postBossKillRespitesEnabled)
+            {
+                return;
+            }
+
+            if (IsSpawnRestWindowActive())
+            {
+                _assaultActive = false;
                 return;
             }
 
@@ -827,7 +867,7 @@ namespace WarfrontDirector
 
         private void TickBreach(float deltaTime)
         {
-            if (_teleporterEventActive && !_breachActive && _sustainedNegativeContestSeconds >= WarfrontDirectorPlugin.BreachContestSeconds.Value)
+            if (_teleporterEventActive && !_postBossKillRespitesEnabled && !_breachActive && _sustainedNegativeContestSeconds >= WarfrontDirectorPlugin.BreachContestSeconds.Value)
             {
                 StartBreach();
             }
@@ -1514,6 +1554,11 @@ namespace WarfrontDirector
                 return;
             }
 
+            if (IsSpawnRestWindowActive())
+            {
+                return;
+            }
+
             for (var i = 0; i < count; i++)
             {
                 var prefab = pool[UnityEngine.Random.Range(0, pool.Count)];
@@ -2124,6 +2169,25 @@ namespace WarfrontDirector
             }
         }
 
+        private void SetDirectorCadenceWavePause()
+        {
+            foreach (var pair in _directorDefaults.ToArray())
+            {
+                var director = pair.Key;
+                if (!director)
+                {
+                    _directorDefaults.Remove(pair.Key);
+                    continue;
+                }
+
+                var defaults = pair.Value;
+                director.creditMultiplier = defaults.CreditMultiplier * 0.03f;
+                director.minSeriesSpawnInterval = Mathf.Max(defaults.MinSeriesSpawnInterval * 2.8f, 14f);
+                director.maxSeriesSpawnInterval = Mathf.Max(defaults.MaxSeriesSpawnInterval * 3.2f, 18f);
+                director.eliteBias = defaults.EliteBias;
+            }
+        }
+
         private void RestoreDirectors()
         {
             foreach (var pair in _directorDefaults)
@@ -2359,11 +2423,16 @@ namespace WarfrontDirector
             _eventBuffMagnitude = 0f;
             _hunterSquadTargetTimer = 0f;
             _bossChallengeScanTimer = 0f;
+            _postBossKillRespiteTimer = 0f;
+            _postBossKillRespiteCycleTimer = 0f;
             _pausedTeleporterCharge = 0f;
             _teleporterFogTickTimer = 0f;
             _hunterSquadTarget = null;
             _teleporterChargePaused = false;
             _teleporterFogActive = false;
+            _teleporterBossObservedAlive = false;
+            _postBossKillRespitesEnabled = false;
+            _postBossWaveActive = false;
             _teleporterFogExposureByMasterId.Clear();
             _teleporterFogSeenPlayerMasterIds.Clear();
 
@@ -2689,13 +2758,12 @@ namespace WarfrontDirector
 
             foreach (var eliteDef in EliteCatalog.eliteDefs)
             {
-                if (eliteDef == null)
+                if (eliteDef == null || eliteDef.eliteEquipmentDef == null)
                 {
                     continue;
                 }
 
-                var token = eliteDef.name ?? string.Empty;
-                var isCurated = CuratedCommanderEliteTokens.Any(t => token.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0);
+                var isCurated = CuratedCommanderEliteTokens.Any(t => EliteMatchesToken(eliteDef, t));
                 if (!isCurated)
                 {
                     continue;
@@ -2704,6 +2772,22 @@ namespace WarfrontDirector
                 if (!_curatedCommanderElites.Contains(eliteDef.eliteIndex))
                 {
                     _curatedCommanderElites.Add(eliteDef.eliteIndex);
+                }
+            }
+
+            if (_curatedCommanderElites.Count == 0)
+            {
+                foreach (var eliteDef in EliteCatalog.eliteDefs)
+                {
+                    if (eliteDef == null || eliteDef.eliteEquipmentDef == null || eliteDef.eliteIndex == EliteIndex.None)
+                    {
+                        continue;
+                    }
+
+                    if (!_curatedCommanderElites.Contains(eliteDef.eliteIndex))
+                    {
+                        _curatedCommanderElites.Add(eliteDef.eliteIndex);
+                    }
                 }
             }
 
@@ -2749,6 +2833,98 @@ namespace WarfrontDirector
             }
 
             master.inventory.SetEquipmentIndex(eliteDef.eliteEquipmentDef.equipmentIndex);
+
+            var body = master.GetBody();
+            ApplyDoctrineBuffPackage(body, _currentDoctrine);
+            ApplyRoleBuffPackage(body, ResolveCommanderRole(nodeType));
+            body?.AddTimedBuff(RoR2Content.Buffs.Warbanner, 8f + GetDifficultyTier() * 1.2f);
+        }
+
+        private bool IsSpawnRestWindowActive()
+        {
+            return _teleporterEventActive && _postBossKillRespitesEnabled && !_postBossWaveActive && _postBossKillRespiteTimer > 0f;
+        }
+
+        private void TickPostBossRespite(float deltaTime)
+        {
+            if (!_postBossKillRespitesEnabled || !_teleporterEventActive || _teleporter == null || !_teleporter.isCharging || _teleporter.isCharged)
+            {
+                _postBossKillRespiteTimer = 0f;
+                _postBossKillRespiteCycleTimer = 0f;
+                _postBossWaveActive = false;
+                return;
+            }
+
+            if (_postBossWaveActive)
+            {
+                _postBossKillRespiteCycleTimer = Mathf.Max(0f, _postBossKillRespiteCycleTimer - deltaTime);
+                _assaultPulseTimer -= deltaTime;
+                if (_assaultPulseTimer <= 0f)
+                {
+                    SpawnAssaultPulse();
+                    _assaultPulseTimer = Mathf.Max(1f, GetAssaultPulseInterval() * 0.72f);
+                }
+
+                if (_postBossKillRespiteCycleTimer <= 0f)
+                {
+                    BeginPostBossKillRespite(initial: false);
+                }
+
+                return;
+            }
+
+            _postBossKillRespiteTimer = Mathf.Max(0f, _postBossKillRespiteTimer - deltaTime);
+            if (_postBossKillRespiteTimer <= 0f)
+            {
+                BeginPostBossKillWave(initial: false);
+            }
+        }
+
+        private void BeginPostBossKillRespite(bool initial)
+        {
+            var restDuration = initial ? 6f : 7f;
+
+            _postBossWaveActive = false;
+            _postBossKillRespiteTimer = restDuration;
+            _postBossKillRespiteCycleTimer = 0f;
+            _assaultActive = false;
+            _breachActive = false;
+            _windowTimer = Mathf.Max(_windowTimer, restDuration);
+            SetDirectorCadenceWavePause();
+
+            if (initial)
+            {
+                BroadcastWarfrontMessage("Boss down. Enemy waves incoming with brief lulls between pushes.", 2.5f);
+            }
+        }
+
+        private void BeginPostBossKillWave(bool initial)
+        {
+            var waveDuration = initial ? 14f : 11f;
+            var openingPulseCount = initial ? 2 : 1;
+            openingPulseCount += Mathf.Clamp(GetDifficultyTier() - 1, 0, 1);
+
+            _postBossWaveActive = true;
+            _postBossKillRespiteTimer = 0f;
+            _postBossKillRespiteCycleTimer = waveDuration;
+            _assaultActive = true;
+            _breachActive = false;
+            _windowTimer = waveDuration;
+            _assaultPulseTimer = Mathf.Max(0.75f, GetAssaultPulseInterval() * 0.6f);
+            _dominantRole = ResolveDominantRole(forceRotate: true);
+
+            SetDirectorCadence(assault: true, recon: false);
+            TriggerEventBuffWindow(initial ? 8f : 6f, 0.16f);
+
+            for (var i = 0; i < openingPulseCount; i++)
+            {
+                SpawnAssaultPulse();
+            }
+
+            if (initial)
+            {
+                BroadcastWarfrontMessage("Boss down. Enemy retaliates in waves with short pauses between pushes.", 2.5f);
+            }
         }
 
         private void TickBossChallengeBuffs(float deltaTime)
@@ -2766,13 +2942,27 @@ namespace WarfrontDirector
             }
 
             _bossChallengeScanTimer = 0.35f;
-            TryApplyBossChallengeAffixForTeam(TeamIndex.Monster);
-            TryApplyBossChallengeAffixForTeam(TeamIndex.Void);
-            TryApplyBossChallengeAffixForTeam(TeamIndex.Lunar);
+            var aliveBossCount = 0;
+            aliveBossCount += TryApplyBossChallengeAffixForTeam(TeamIndex.Monster);
+            aliveBossCount += TryApplyBossChallengeAffixForTeam(TeamIndex.Void);
+            aliveBossCount += TryApplyBossChallengeAffixForTeam(TeamIndex.Lunar);
+
+            if (aliveBossCount > 0)
+            {
+                _teleporterBossObservedAlive = true;
+                return;
+            }
+
+            if (_teleporterBossObservedAlive && !_postBossKillRespitesEnabled)
+            {
+                _postBossKillRespitesEnabled = true;
+                BeginPostBossKillWave(initial: true);
+            }
         }
 
-        private void TryApplyBossChallengeAffixForTeam(TeamIndex teamIndex)
+        private int TryApplyBossChallengeAffixForTeam(TeamIndex teamIndex)
         {
+            var aliveBossCount = 0;
             var members = TeamComponent.GetTeamMembers(teamIndex);
             foreach (var member in members)
             {
@@ -2782,8 +2972,11 @@ namespace WarfrontDirector
                     continue;
                 }
 
+                aliveBossCount++;
                 TryApplyBossChallengeAffix(body.master);
             }
+
+            return aliveBossCount;
         }
 
         private bool TryApplyBossChallengeAffix(CharacterMaster master)
@@ -2856,14 +3049,58 @@ namespace WarfrontDirector
             foreach (var eliteIndex in _curatedCommanderElites)
             {
                 var eliteDef = EliteCatalog.GetEliteDef(eliteIndex);
-                var name = eliteDef?.name ?? string.Empty;
-                if (name.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (EliteMatchesToken(eliteDef, token))
                 {
                     return eliteIndex;
                 }
             }
 
             return _curatedCommanderElites.Count > 0 ? _curatedCommanderElites[0] : EliteIndex.None;
+        }
+
+        private static bool EliteMatchesToken(EliteDef eliteDef, string token)
+        {
+            if (eliteDef == null)
+            {
+                return false;
+            }
+
+            var descriptor = $"{eliteDef.name} {eliteDef.eliteEquipmentDef?.name}";
+            foreach (var alias in GetEliteTokenAliases(token))
+            {
+                if (descriptor.IndexOf(alias, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<string> GetEliteTokenAliases(string token)
+        {
+            var normalized = (token ?? string.Empty).ToUpperInvariant();
+            switch (normalized)
+            {
+                case "BLAZING":
+                case "AFFIXRED":
+                case "EDFIRE":
+                    return new[] { "BLAZING", "AFFIXRED", "EDFIRE", "FIRE" };
+                case "GLACIAL":
+                case "AFFIXBLUE":
+                case "EDICE":
+                    return new[] { "GLACIAL", "AFFIXBLUE", "EDICE", "ICE" };
+                case "OVERLOADING":
+                case "AFFIXWHITE":
+                case "EDLIGHTNING":
+                    return new[] { "OVERLOADING", "AFFIXWHITE", "EDLIGHTNING", "LIGHTNING" };
+                case "MENDING":
+                case "AFFIXPOISON":
+                case "EDPOISON":
+                    return new[] { "MENDING", "AFFIXPOISON", "EDPOISON", "POISON" };
+                default:
+                    return new[] { normalized };
+            }
         }
 
         private static bool IsBossMaster(CharacterMaster master)
@@ -2907,12 +3144,21 @@ namespace WarfrontDirector
                 return body.corePosition;
             }
 
-            if (!_teleporterEventActive || _holdoutZone == null || !_holdoutZone.IsBodyInChargingRadius(body))
+            if (!_teleporterEventActive)
             {
                 return body.corePosition;
             }
 
             var objective = GetObjectivePosition();
+            var minEventDistance = GetTeleporterEventSpawnMinDistance();
+            var minEventDistanceSqr = minEventDistance * minEventDistance;
+            var insideChargingRadius = _holdoutZone != null && _holdoutZone.IsBodyInChargingRadius(body);
+            var tooCloseToObjective = GetFlatDistanceSqr(body.corePosition, objective) < minEventDistanceSqr;
+            if (!insideChargingRadius && !tooCloseToObjective)
+            {
+                return body.corePosition;
+            }
+
             var outward = body.corePosition - objective;
             outward.y = 0f;
             if (outward.sqrMagnitude < 0.05f)
@@ -2936,20 +3182,34 @@ namespace WarfrontDirector
 
             for (var attempt = 0; attempt < 12; attempt++)
             {
-                var distance = 28f + attempt * 5f;
+                var distance = minEventDistance + attempt * 5f;
                 var spin = Quaternion.AngleAxis(UnityEngine.Random.Range(-50f, 50f), Vector3.up);
                 var candidateDirection = (spin * outward).normalized;
                 var candidate = FindGroundedPosition(objective + candidateDirection * distance, 2f, 10f);
                 MoveBodyToSpawnPosition(body, candidate);
-                if (!_holdoutZone.IsBodyInChargingRadius(body))
+                var candidateInsideCharge = _holdoutZone != null && _holdoutZone.IsBodyInChargingRadius(body);
+                if (!candidateInsideCharge && GetFlatDistanceSqr(body.corePosition, objective) >= minEventDistanceSqr)
                 {
                     return body.corePosition;
                 }
             }
 
-            var fallback = FindGroundedPosition(objective + outward * 96f, 0f, 12f);
+            var fallbackDistance = minEventDistance + 36f;
+            var fallback = FindGroundedPosition(objective + outward * fallbackDistance, 0f, 12f);
             MoveBodyToSpawnPosition(body, fallback);
             return body.corePosition;
+        }
+
+        private float GetTeleporterEventSpawnMinDistance()
+        {
+            return 30f + GetDifficultyTier() * 2f;
+        }
+
+        private static float GetFlatDistanceSqr(Vector3 a, Vector3 b)
+        {
+            a.y = 0f;
+            b.y = 0f;
+            return (a - b).sqrMagnitude;
         }
 
         private static void MoveBodyToSpawnPosition(CharacterBody body, Vector3 position)
