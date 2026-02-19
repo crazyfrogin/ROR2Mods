@@ -208,7 +208,7 @@ let private spawnProtocolMimic (player: PlayerControllerB) =
             networkObject.Spawn(destroyWithScene = true)
             setActiveMimic player.playerClientId networkObject
             let mimicController = maskedEnemy.AddComponent<MimicController>()
-            mimicController.StartControlling player
+            mimicController.StartControlling()
             player.GetComponent<BodyDeactivator>().DeactivateBody enemyAI
             logInfo $"Possession Protocol: player #{player.playerClientId} is now the active mimic. Queue length: {queueLength()}"
             true
@@ -345,6 +345,55 @@ let private processPlayerDeath (player: PlayerControllerB) causeOfDeath deathAni
                 if enqueue player.playerClientId then
                     logWarning $"Possession Protocol: failed immediate spawn for player #{player.playerClientId}; added to queue instead."
 
+let [<Literal>] private MouseSensitivity = 2.0f
+let [<Literal>] private CameraSmoothSpeed = 15.0f
+let mutable private cameraPitch = 0f
+
+let private tryFindHeadTransform (root: Transform) =
+    let transforms = root.GetComponentsInChildren<Transform>()
+    transforms
+        |> Array.tryFind (fun t -> t.name = "HeadPoint" || t.name = "Head" || t.name = "spine.004")
+
+let private isLocalPlayerControllingMimic (player: PlayerControllerB) =
+    player.isPlayerDead
+        && not (isNull player.redirectToEnemy)
+        && getConfig().enablePossessionProtocol
+        && isActiveProtocolMimic player.redirectToEnemy
+
+let private handleMimicMovementInput (player: PlayerControllerB) =
+    let enemy = player.redirectToEnemy
+    let mouseX = Input.GetAxis("Mouse X") * MouseSensitivity
+    let mouseY = Input.GetAxis("Mouse Y") * MouseSensitivity
+    cameraPitch <- Mathf.Clamp(cameraPitch - mouseY, -80f, 80f)
+
+    let moveX = Input.GetAxis("Horizontal")
+    let moveZ = Input.GetAxis("Vertical")
+    let isSprinting = Input.GetKey(KeyCode.LeftShift)
+    let yRotation = enemy.transform.eulerAngles.y + mouseX
+
+    if NetworkManager.Singleton.IsHost then
+        let controller = enemy.GetComponent<MimicController>()
+        if not (isNull controller) && controller.IsControlled then
+            controller.ApplyMovement(moveX, moveZ, yRotation, isSprinting)
+    else
+        let bodyDeactivator = player.GetComponent<BodyDeactivator>()
+        if not (isNull bodyDeactivator) then
+            bodyDeactivator.MimicMoveServerRpc(moveX, moveZ, yRotation, isSprinting)
+
+let private handleMimicCameraOverride (player: PlayerControllerB) =
+    let enemy = player.redirectToEnemy
+    let camera = player.gameplayCamera
+    if isNull camera || isNull enemy then ()
+    else
+        let headOption = tryFindHeadTransform enemy.transform
+        let targetPos =
+            match headOption with
+                | Some head -> head.position + Vector3(0f, 0.1f, 0f)
+                | None -> enemy.transform.position + Vector3(0f, 2.2f, 0f)
+        let targetRot = Quaternion.Euler(cameraPitch, enemy.transform.eulerAngles.y, 0f)
+        camera.transform.position <- Vector3.Lerp(camera.transform.position, targetPos, CameraSmoothSpeed * Time.deltaTime)
+        camera.transform.rotation <- Quaternion.Slerp(camera.transform.rotation, targetRot, CameraSmoothSpeed * Time.deltaTime)
+
 let revivePlayersOnDeath () =
     On.GameNetcodeStuff.PlayerControllerB.add_Awake(fun orig self -> 
         orig.Invoke self
@@ -367,6 +416,7 @@ let revivePlayersOnDeath () =
     On.StartOfRound.add_StartGame(fun orig self ->
         orig.Invoke self
         reset()
+        cameraPitch <- 0f
     )
 
     // Spawn a masked enemy on player death.
@@ -431,8 +481,19 @@ let revivePlayersOnDeath () =
             else StartOfRound.Instance.localPlayerController
         if self = localPlayer then
             synchronizeActiveMimicState()
-            if Input.GetMouseButtonDown(0) then
-                tryUseMimicVoiceAbility self
+            if isLocalPlayerControllingMimic self then
+                handleMimicMovementInput self
+                if Input.GetMouseButtonDown(0) then
+                    tryUseMimicVoiceAbility self
+    )
+
+    On.GameNetcodeStuff.PlayerControllerB.add_LateUpdate(fun orig self ->
+        orig.Invoke self
+        let localPlayer =
+            if isNull StartOfRound.Instance then null
+            else StartOfRound.Instance.localPlayerController
+        if self = localPlayer && isLocalPlayerControllingMimic self then
+            handleMimicCameraOverride self
     )
 
     On.GameNetworkManager.add_StartDisconnect(fun orig self ->

@@ -1,12 +1,15 @@
 module Mirage.Revive.Unity.BodyDeactivator
 
+open UnityEngine
 open Unity.Netcode
 open GameNetcodeStuff
 open System.Threading.Tasks
 open Mirage.Revive.Domain.Logger
 open Mirage.Revive.Domain.Possession
+open Mirage.Revive.Unity.MimicController
 
 /// A component that should be attached to a __PlayerControllerB__, reviving the player as a masked enemy.
+[<AllowNullLiteral>]
 type BodyDeactivator () =
     inherit NetworkBehaviour()
 
@@ -42,3 +45,11 @@ type BodyDeactivator () =
     member this.DeactivateBodyClientRpc(reference: NetworkObjectReference) =
         if not this.IsHost then
             ignore <| this.TryResolveEnemy(reference, 20)
+
+    [<ServerRpc(RequireOwnership = false)>]
+    member _.MimicMoveServerRpc(moveX: float32, moveZ: float32, yRotation: float32, isSprinting: bool) =
+        let mimics = Object.FindObjectsOfType<MaskedPlayerEnemy>()
+        for masked in mimics do
+            let controller = masked.GetComponent<MimicController>()
+            if not (isNull controller) && controller.IsControlled then
+                controller.ApplyMovement(moveX, moveZ, yRotation, isSprinting)
