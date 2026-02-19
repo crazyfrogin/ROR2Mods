@@ -103,11 +103,17 @@ namespace WarfrontDirector
             TickAura(body, deltaTime);
             TickAntiKite(body, deltaTime);
             TickEnrage(body, deltaTime);
-            TickPassiveRegen(body, deltaTime);
         }
 
         private void TickTether(CharacterBody body, float deltaTime)
         {
+            DriftCommandZone(deltaTime);
+
+            if (IsPlayerNearby(body.corePosition, _tetherDistance))
+            {
+                return;
+            }
+
             var toZone = _commandZonePosition - body.corePosition;
             toZone.y = 0f;
             var distance = toZone.magnitude;
@@ -136,6 +142,29 @@ namespace WarfrontDirector
             {
                 body.rigidbody.velocity += pullDirection * (18f * deltaTime);
             }
+        }
+
+        private void DriftCommandZone(float deltaTime)
+        {
+            if (_owner == null)
+            {
+                return;
+            }
+
+            var objective = _owner.GetObjectivePositionForAI();
+            if (objective == Vector3.zero)
+            {
+                return;
+            }
+
+            var toObjective = objective - _commandZonePosition;
+            toObjective.y = 0f;
+            if (toObjective.sqrMagnitude < 4f)
+            {
+                return;
+            }
+
+            _commandZonePosition += toObjective.normalized * Mathf.Min(6f * deltaTime, toObjective.magnitude);
         }
 
         private void TickAura(CharacterBody commanderBody, float deltaTime)

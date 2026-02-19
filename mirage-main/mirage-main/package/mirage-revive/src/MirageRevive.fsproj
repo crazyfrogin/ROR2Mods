@@ -33,6 +33,7 @@
     <Compile Include="Mirage/Revive/Domain/Possession.fs" />
     <Compile Include="Mirage/Revive/Hook/Config.fs" />
     <Compile Include="Mirage/Revive/Unity/BodyDeactivator.fs" />
+    <Compile Include="Mirage/Revive/Unity/MimicController.fs" />
     <Compile Include="Mirage/Revive/Hook/MaskedPlayerEnemy.fs" />
     <Compile Include="Mirage/Revive/Plugin.fs" />
   </ItemGroup>

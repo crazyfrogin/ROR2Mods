@@ -13,6 +13,7 @@ open Unity.Netcode
 open Mirage.Revive.Domain.Config
 open Mirage.Revive.Domain.Possession
 open Mirage.Revive.Unity.BodyDeactivator
+open Mirage.Revive.Unity.MimicController
 open Mirage.Revive.Domain.Logger
 
 let private random = Random()
@@ -206,6 +207,8 @@ let private spawnProtocolMimic (player: PlayerControllerB) =
             enemyAI.mimickingPlayer <- player
             networkObject.Spawn(destroyWithScene = true)
             setActiveMimic player.playerClientId networkObject
+            let mimicController = maskedEnemy.AddComponent<MimicController>()
+            mimicController.StartControlling player
             player.GetComponent<BodyDeactivator>().DeactivateBody enemyAI
             logInfo $"Possession Protocol: player #{player.playerClientId} is now the active mimic. Queue length: {queueLength()}"
             true
@@ -285,6 +288,11 @@ let private tryUseMimicVoiceAbility (player: PlayerControllerB) =
                 let enemy = player.redirectToEnemy
                 ignore <| tryStreamClipFromEnemy enemy recording
 
+let private stopMimicController (maskedEnemy: MaskedPlayerEnemy) =
+    let controller = maskedEnemy.GetComponent<MimicController>()
+    if not (isNull controller) then
+        controller.StopControlling()
+
 let private onActiveMimicKill (victim: PlayerControllerB) =
     match tryGetActiveOwnerId() with
         | None -> ()
@@ -299,6 +307,7 @@ let private onActiveMimicKill (victim: PlayerControllerB) =
                 logWarning $"Possession Protocol: cash-out owner #{ownerId} is not available to revive."
     tryFindActiveProtocolMimic()
         |> Option.iter (fun activeMimic ->
+            stopMimicController activeMimic
             let networkObject = activeMimic.GetComponentInChildren<NetworkObject>()
             if not (isNull networkObject) && networkObject.IsSpawned then
                 networkObject.Despawn(true)
@@ -384,6 +393,23 @@ let revivePlayersOnDeath () =
             processPlayerDeath self (int causeOfDeath) deathAnimation spawnBody bodyVelocity alivePlayersBeforeDeath killerEnemy
     )
 
+    // Suppress AI behaviour for player-controlled mimics.
+    On.MaskedPlayerEnemy.add_DoAIInterval(fun orig self ->
+        let controller = self.GetComponent<MimicController>()
+        if not (isNull controller) && controller.IsControlled then
+            () // Skip AI interval entirely when player-controlled.
+        else
+            orig.Invoke self
+    )
+
+    On.EnemyAI.add_Update(fun orig self ->
+        let controller = self.GetComponent<MimicController>()
+        if not (isNull controller) && controller.IsControlled then
+            () // Skip base EnemyAI.Update when player-controlled.
+        else
+            orig.Invoke self
+    )
+
     On.MaskedPlayerEnemy.add_KillEnemy(fun orig self destroy ->
         let activeOnThisClient = getConfig().enablePossessionProtocol && isActiveProtocolMimic (self.GetComponent<EnemyAI>())
         let isHostActiveMimic = self.IsHost && activeOnThisClient
@@ -391,6 +417,7 @@ let revivePlayersOnDeath () =
             suppressProtocolDrops self
         orig.Invoke(self, destroy)
         if activeOnThisClient then
+            stopMimicController self
             clearActiveMimic()
         if isHostActiveMimic then
             logInfo "Possession Protocol: active mimic died before cash-out. Advancing queue."
