@@ -1,9 +1,9 @@
 module Mirage.Revive.Unity.BodyDeactivator
 
+open System.Collections
 open UnityEngine
 open Unity.Netcode
 open GameNetcodeStuff
-open System.Threading.Tasks
 open Mirage.Revive.Domain.Logger
 open Mirage.Revive.Domain.Possession
 open Mirage.Revive.Unity.MimicController
@@ -13,19 +13,20 @@ open Mirage.Revive.Unity.MimicController
 type BodyDeactivator () =
     inherit NetworkBehaviour()
 
-    member private this.TryResolveEnemy(reference: NetworkObjectReference, retries) =
-        task {
+    member private this.TryResolveEnemyCoroutine(reference: NetworkObjectReference, retries: int) =
+        seq {
             let mutable enemyNetworkObject = null
-            if reference.TryGet &enemyNetworkObject then
+            let mutable remaining = retries
+            while remaining > 0 && not (reference.TryGet &enemyNetworkObject) do
+                remaining <- remaining - 1
+                yield WaitForSeconds 0.05f :> obj
+            if not (isNull enemyNetworkObject) then
                 let player = this.GetComponent<PlayerControllerB>()
                 setActiveMimic player.playerClientId enemyNetworkObject
                 this.DeactivateBody <| enemyNetworkObject.GetComponent<EnemyAI>()
-            elif retries > 0 then
-                do! Task.Delay 50
-                do! this.TryResolveEnemy(reference, retries - 1)
             else
                 logError "DeactivateBodyClientRpc failed to resolve enemy network object after retries."
-        }
+        } :?> IEnumerator
 
     /// Deactivate the player's dead body and redirect the enemy to the player.
     member this.DeactivateBody(enemy) =
@@ -44,7 +45,7 @@ type BodyDeactivator () =
     [<ClientRpc>]
     member this.DeactivateBodyClientRpc(reference: NetworkObjectReference) =
         if not this.IsHost then
-            ignore <| this.TryResolveEnemy(reference, 20)
+            this.StartCoroutine(this.TryResolveEnemyCoroutine(reference, 20)) |> ignore
 
     [<ServerRpc(RequireOwnership = false)>]
     member _.MimicMoveServerRpc(moveX: float32, moveZ: float32, yRotation: float32, isSprinting: bool) =

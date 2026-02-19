@@ -346,8 +346,8 @@ let private processPlayerDeath (player: PlayerControllerB) causeOfDeath deathAni
                     logWarning $"Possession Protocol: failed immediate spawn for player #{player.playerClientId}; added to queue instead."
 
 let [<Literal>] private MouseSensitivity = 2.0f
-let [<Literal>] private CameraSmoothSpeed = 15.0f
 let mutable private cameraPitch = 0f
+let mutable private controlLoggedOnce = false
 
 let private tryFindHeadTransform (root: Transform) =
     let transforms = root.GetComponentsInChildren<Transform>()
@@ -361,6 +361,10 @@ let private isLocalPlayerControllingMimic (player: PlayerControllerB) =
         && isActiveProtocolMimic player.redirectToEnemy
 
 let private handleMimicMovementInput (player: PlayerControllerB) =
+    // Lock cursor so mouse delta input works (cursor is normally free when dead).
+    Cursor.lockState <- CursorLockMode.Locked
+    Cursor.visible <- false
+
     let enemy = player.redirectToEnemy
     let mouseX = Input.GetAxis("Mouse X") * MouseSensitivity
     let mouseY = Input.GetAxis("Mouse Y") * MouseSensitivity
@@ -370,6 +374,11 @@ let private handleMimicMovementInput (player: PlayerControllerB) =
     let moveZ = Input.GetAxis("Vertical")
     let isSprinting = Input.GetKey(KeyCode.LeftShift)
     let yRotation = enemy.transform.eulerAngles.y + mouseX
+
+    if not controlLoggedOnce then
+        controlLoggedOnce <- true
+        let hasController = not (isNull (enemy.GetComponent<MimicController>()))
+        logInfo $"Possession Protocol: local player controlling mimic. IsHost={NetworkManager.Singleton.IsHost}, HasController={hasController}"
 
     if NetworkManager.Singleton.IsHost then
         let controller = enemy.GetComponent<MimicController>()
@@ -391,18 +400,24 @@ let private handleMimicCameraOverride (player: PlayerControllerB) =
                 | Some head -> head.position + Vector3(0f, 0.1f, 0f)
                 | None -> enemy.transform.position + Vector3(0f, 2.2f, 0f)
         let targetRot = Quaternion.Euler(cameraPitch, enemy.transform.eulerAngles.y, 0f)
-        camera.transform.position <- Vector3.Lerp(camera.transform.position, targetPos, CameraSmoothSpeed * Time.deltaTime)
-        camera.transform.rotation <- Quaternion.Slerp(camera.transform.rotation, targetRot, CameraSmoothSpeed * Time.deltaTime)
+        // Snap camera directly; lerping lets the spectator cam win for a frame.
+        camera.transform.position <- targetPos
+        camera.transform.rotation <- targetRot
 
 let revivePlayersOnDeath () =
     On.GameNetcodeStuff.PlayerControllerB.add_Awake(fun orig self -> 
         orig.Invoke self
-        ignore <| self.gameObject.AddComponent<BodyDeactivator>()
+        if isNull (self.GetComponent<BodyDeactivator>()) then
+            ignore <| self.gameObject.AddComponent<BodyDeactivator>()
     )
 
     // Save the haunted mask item prefab.
     On.GameNetworkManager.add_Start(fun orig self ->
         orig.Invoke self
+        // Register BodyDeactivator on the player prefab so NGO discovers it before spawn.
+        let playerPrefab = self.GetComponent<NetworkManager>().NetworkConfig.PlayerPrefab
+        if not (isNull playerPrefab) && isNull (playerPrefab.GetComponent<BodyDeactivator>()) then
+            ignore <| playerPrefab.AddComponent<BodyDeactivator>()
         for prefab in self.GetComponent<NetworkManager>().NetworkConfig.Prefabs.m_Prefabs do
             let maskedEnemy = prefab.Prefab.gameObject.GetComponent<MaskedPlayerEnemy>()
             // enemyName must be matched to avoid mods that extend from MaskedPlayerEnemy.
@@ -417,6 +432,7 @@ let revivePlayersOnDeath () =
         orig.Invoke self
         reset()
         cameraPitch <- 0f
+        controlLoggedOnce <- false
     )
 
     // Spawn a masked enemy on player death.
@@ -446,7 +462,9 @@ let revivePlayersOnDeath () =
     // Suppress AI behaviour for player-controlled mimics.
     On.MaskedPlayerEnemy.add_DoAIInterval(fun orig self ->
         let controller = self.GetComponent<MimicController>()
-        if not (isNull controller) && controller.IsControlled then
+        let hostControlled = not (isNull controller) && controller.IsControlled
+        let clientProtocol = getConfig().enablePossessionProtocol && isActiveProtocolMimic (self :> EnemyAI)
+        if hostControlled || clientProtocol then
             () // Skip AI interval entirely when player-controlled.
         else
             orig.Invoke self
@@ -454,8 +472,20 @@ let revivePlayersOnDeath () =
 
     On.EnemyAI.add_Update(fun orig self ->
         let controller = self.GetComponent<MimicController>()
-        if not (isNull controller) && controller.IsControlled then
+        let hostControlled = not (isNull controller) && controller.IsControlled
+        let clientProtocol = getConfig().enablePossessionProtocol && isActiveProtocolMimic self
+        if hostControlled || clientProtocol then
             () // Skip base EnemyAI.Update when player-controlled.
+        else
+            orig.Invoke self
+    )
+
+    On.MaskedPlayerEnemy.add_Update(fun orig self ->
+        let controller = self.GetComponent<MimicController>()
+        let hostControlled = not (isNull controller) && controller.IsControlled
+        let clientProtocol = getConfig().enablePossessionProtocol && isActiveProtocolMimic (self :> EnemyAI)
+        if hostControlled || clientProtocol then
+            () // Skip MaskedPlayerEnemy.Update when player-controlled.
         else
             orig.Invoke self
     )
@@ -483,6 +513,7 @@ let revivePlayersOnDeath () =
             synchronizeActiveMimicState()
             if isLocalPlayerControllingMimic self then
                 handleMimicMovementInput self
+                handleMimicCameraOverride self
                 if Input.GetMouseButtonDown(0) then
                     tryUseMimicVoiceAbility self
     )
