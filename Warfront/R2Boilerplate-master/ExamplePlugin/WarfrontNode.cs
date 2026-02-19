@@ -8,16 +8,25 @@ namespace WarfrontDirector
     {
         private const float DefaultEffectRadius = 30f;
         private const float DefaultTetherDistance = 54f;
-        private const float HardSnapMultiplier = 1.45f;
-        private const float AuraPulseInterval = 0.9f;
+        private const float HardSnapMultiplier = 1.35f;
+        private const float AuraPulseInterval = 0.75f;
         private const float AntiKiteSeconds = 7f;
         private const float ReengageBurstSeconds = 3f;
+        private const float EnrageThreshold = 0.5f;
+        private const float FrenzyThreshold = 0.25f;
+        private const float EnragePulseInterval = 1.2f;
+        private const float RegenPulseInterval = 2f;
+        private const float RegenFraction = 0.008f;
 
         private WarfrontDirectorController _owner;
         private CharacterMaster _master;
         private bool _consumed;
         private float _auraTimer;
         private float _idleTimer;
+        private float _enrageTimer;
+        private float _regenTimer;
+        private bool _enraged;
+        private bool _frenzied;
         private float _tetherDistance = DefaultTetherDistance;
         private Vector3 _commandZonePosition;
 
@@ -25,6 +34,7 @@ namespace WarfrontDirector
         internal float EffectRadius { get; private set; } = DefaultEffectRadius;
         internal bool IsActive => !_consumed && _master != null && _master.hasBody;
         internal Vector3 CommandZonePosition => _commandZonePosition;
+        internal CharacterMaster Master => _master;
 
         internal void Initialize(WarfrontDirectorController owner, WarfrontNodeType nodeType, CharacterMaster master, Vector3 commandZonePosition, float effectRadius, float tetherDistance)
         {
@@ -37,6 +47,10 @@ namespace WarfrontDirector
             _tetherDistance = Mathf.Max(24f, tetherDistance);
             _auraTimer = AuraPulseInterval;
             _idleTimer = 0f;
+            _enrageTimer = 0f;
+            _regenTimer = 0f;
+            _enraged = false;
+            _frenzied = false;
         }
 
         internal bool AffectsPosition(Vector3 position)
@@ -88,6 +102,8 @@ namespace WarfrontDirector
             TickTether(body, deltaTime);
             TickAura(body, deltaTime);
             TickAntiKite(body, deltaTime);
+            TickEnrage(body, deltaTime);
+            TickPassiveRegen(body, deltaTime);
         }
 
         private void TickTether(CharacterBody body, float deltaTime)
@@ -114,11 +130,11 @@ namespace WarfrontDirector
             var pullDirection = toZone / Mathf.Max(0.01f, distance);
             if (body.characterMotor != null)
             {
-                body.characterMotor.velocity += pullDirection * (18f * deltaTime);
+                body.characterMotor.velocity += pullDirection * (24f * deltaTime);
             }
             else if (body.rigidbody != null)
             {
-                body.rigidbody.velocity += pullDirection * (14f * deltaTime);
+                body.rigidbody.velocity += pullDirection * (18f * deltaTime);
             }
         }
 
@@ -161,20 +177,20 @@ namespace WarfrontDirector
             switch (NodeType)
             {
                 case WarfrontNodeType.Relay:
-                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 1.5f);
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 2.4f);
                     break;
                 case WarfrontNodeType.Forge:
-                    body.healthComponent.HealFraction(0.03f, default);
+                    body.healthComponent.HealFraction(0.05f, default);
                     break;
                 case WarfrontNodeType.Siren:
                     if (body.healthComponent.combinedHealthFraction < 0.98f)
                     {
-                        body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 1.1f);
+                        body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 1.8f);
                     }
 
                     break;
                 case WarfrontNodeType.SpawnCache:
-                    body.healthComponent.HealFraction(0.018f, default);
+                    body.healthComponent.HealFraction(0.032f, default);
                     break;
             }
         }
@@ -216,6 +232,70 @@ namespace WarfrontDirector
             }
 
             return false;
+        }
+
+        private void TickEnrage(CharacterBody body, float deltaTime)
+        {
+            var hpFraction = body.healthComponent.combinedHealthFraction;
+
+            if (!_frenzied && hpFraction <= FrenzyThreshold)
+            {
+                _frenzied = true;
+                body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, 20f);
+                body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 20f);
+                body.AddTimedBuff(RoR2Content.Buffs.CloakSpeed, 12f);
+                body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 20f);
+                body.AddTimedBuff(RoR2Content.Buffs.Energized, 20f);
+            }
+            else if (!_enraged && hpFraction <= EnrageThreshold)
+            {
+                _enraged = true;
+                body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, 14f);
+                body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 14f);
+                body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 14f);
+            }
+
+            if (!_enraged)
+            {
+                return;
+            }
+
+            _enrageTimer -= deltaTime;
+            if (_enrageTimer > 0f)
+            {
+                return;
+            }
+
+            _enrageTimer = EnragePulseInterval;
+
+            if (_frenzied)
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, EnragePulseInterval + 0.3f);
+                body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, EnragePulseInterval + 0.3f);
+            }
+            else
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.Warbanner, EnragePulseInterval + 0.3f);
+            }
+        }
+
+        private void TickPassiveRegen(CharacterBody body, float deltaTime)
+        {
+            _regenTimer -= deltaTime;
+            if (_regenTimer > 0f)
+            {
+                return;
+            }
+
+            _regenTimer = RegenPulseInterval;
+
+            var healAmount = RegenFraction;
+            if (_enraged)
+            {
+                healAmount *= 0.5f;
+            }
+
+            body.healthComponent.HealFraction(healAmount, default);
         }
 
         private Vector3 GetCenterPosition()

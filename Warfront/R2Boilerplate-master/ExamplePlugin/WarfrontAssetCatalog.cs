@@ -9,6 +9,7 @@ namespace WarfrontDirector
         private static readonly List<GameObject> _reconMasterPrefabs = new List<GameObject>();
         private static readonly List<GameObject> _assaultMasterPrefabs = new List<GameObject>();
         private static readonly List<GameObject> _heavyMasterPrefabs = new List<GameObject>();
+        private static readonly List<GameObject> _commanderMasterPrefabs = new List<GameObject>();
 
         internal static bool IsLoaded { get; private set; }
 
@@ -18,6 +19,7 @@ namespace WarfrontDirector
         internal static IReadOnlyList<GameObject> ReconMasterPrefabs => _reconMasterPrefabs;
         internal static IReadOnlyList<GameObject> AssaultMasterPrefabs => _assaultMasterPrefabs;
         internal static IReadOnlyList<GameObject> HeavyMasterPrefabs => _heavyMasterPrefabs;
+        internal static IReadOnlyList<GameObject> CommanderMasterPrefabs => _commanderMasterPrefabs;
 
         internal static void Load()
         {
@@ -34,6 +36,16 @@ namespace WarfrontDirector
             var wispMaster = TryLoadPrefab("RoR2/Base/Wisp/WispMaster.prefab");
             var golemMaster = TryLoadPrefab("RoR2/Base/Golem/GolemMaster.prefab");
 
+            var beetleGuardMaster = TryLoadPrefab("RoR2/Base/BeetleGuardAlly/BeetleGuardMaster.prefab");
+            if (!beetleGuardMaster) beetleGuardMaster = TryLoadPrefab("RoR2/Base/Beetle/BeetleGuardMaster.prefab");
+            var elderLemurianMaster = TryLoadPrefab("RoR2/Base/LemurianBruiser/LemurianBruiserMaster.prefab");
+            var greaterWispMaster = TryLoadPrefab("RoR2/Base/GreaterWisp/GreaterWispMaster.prefab");
+            var clayTemplarMaster = TryLoadPrefab("RoR2/Base/ClayBruiser/ClayBruiserMaster.prefab");
+            var bisonMaster = TryLoadPrefab("RoR2/Base/Bison/BisonMaster.prefab");
+            var vagrantMaster = TryLoadPrefab("RoR2/Base/Vagrant/VagrantMaster.prefab");
+            var parentMaster = TryLoadPrefab("RoR2/Base/Parent/ParentMaster.prefab");
+            var bellMaster = TryLoadPrefab("RoR2/Base/Bell/BellMaster.prefab");
+
             AddIfValid(_reconMasterPrefabs, beetleMaster);
             AddIfValid(_reconMasterPrefabs, lemurianMaster);
 
@@ -43,6 +55,16 @@ namespace WarfrontDirector
 
             AddIfValid(_heavyMasterPrefabs, golemMaster);
             AddIfValid(_heavyMasterPrefabs, lemurianMaster);
+
+            AddIfValid(_commanderMasterPrefabs, beetleGuardMaster);
+            AddIfValid(_commanderMasterPrefabs, elderLemurianMaster);
+            AddIfValid(_commanderMasterPrefabs, greaterWispMaster);
+            AddIfValid(_commanderMasterPrefabs, clayTemplarMaster);
+            AddIfValid(_commanderMasterPrefabs, golemMaster);
+            AddIfValid(_commanderMasterPrefabs, bisonMaster);
+            AddIfValid(_commanderMasterPrefabs, vagrantMaster);
+            AddIfValid(_commanderMasterPrefabs, parentMaster);
+            AddIfValid(_commanderMasterPrefabs, bellMaster);
 
             IsLoaded = true;
         }

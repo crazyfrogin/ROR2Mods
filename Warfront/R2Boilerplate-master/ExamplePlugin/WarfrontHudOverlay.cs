@@ -7,7 +7,7 @@ namespace WarfrontDirector
     {
         private static readonly Rect PanelRect = new Rect(14f, 132f, 320f, 102f);
         private static readonly Rect IntensityBarRect = new Rect(24f, 176f, 284f, 12f);
-        private static readonly Rect ContestBarRect = new Rect(24f, 192f, 284f, 12f);
+        private static readonly Rect SiegeTierBarRect = new Rect(24f, 192f, 284f, 12f);
 
         private GUIStyle _headerStyle;
         private GUIStyle _textStyle;
@@ -35,7 +35,7 @@ namespace WarfrontDirector
             GUI.Label(new Rect(24f, 154f, 284f, 18f), TrimOperationSummary(snapshot.OperationSummary), _textStyle);
 
             DrawBar(IntensityBarRect, new Color(0.2f, 0.55f, 0.95f), Mathf.Clamp01(snapshot.Intensity / 100f));
-            DrawBar(ContestBarRect, snapshot.ContestColor, Mathf.Clamp01((snapshot.ContestDelta + 5f) / 10f));
+            DrawBar(SiegeTierBarRect, snapshot.ContestColor, Mathf.Clamp01(snapshot.ContestDelta / 3f));
 
             GUI.color = Color.white;
             GUI.Label(new Rect(24f, 208f, 284f, 16f),
@@ -48,7 +48,7 @@ namespace WarfrontDirector
                     : "Stable";
 
             GUI.Label(new Rect(24f, 221f, 284f, 16f),
-                $"{(snapshot.AssaultActive ? "Assault" : "Breather")}{(snapshot.BreachActive ? " BREACH" : string.Empty)} {snapshot.WindowTimeRemaining:0}s | {fairnessText}", _textStyle);
+                $"{(snapshot.AssaultActive ? "Assault" : "Breather")} T{snapshot.ContestDelta:0} {snapshot.WindowTimeRemaining:0}s | {fairnessText}", _textStyle);
         }
 
         private void DrawBar(Rect rect, Color fill, float normalizedValue)

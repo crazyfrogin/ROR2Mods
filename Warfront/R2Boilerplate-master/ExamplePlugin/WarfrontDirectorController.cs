@@ -90,6 +90,12 @@ namespace WarfrontDirector
         private const float TeleporterFogRampDamageFractionPerSecond = 0.01f;
         private const float TeleporterFogMaxRampDamageFractionPerSecond = 0.09f;
 
+        private static readonly float[] SiegePulseIntervalScale = { 1f, 0.85f, 0.7f, 0.55f };
+        private static readonly int[] SiegeSpawnCountBonus = { 0, 1, 2, 3 };
+        private static readonly float[] SiegeBreatherScale = { 1f, 0.8f, 0.65f, 0.5f };
+        private static readonly float[] SiegeHeavyChanceBonus = { 0f, 0.08f, 0.16f, 0.24f };
+        private const float ZoneShrinkMinFractionDefault = 0.55f;
+
         private readonly List<WarfrontNode> _activeNodes = new List<WarfrontNode>();
         private readonly Dictionary<CombatDirector, DirectorDefaults> _directorDefaults = new Dictionary<CombatDirector, DirectorDefaults>();
         private readonly HashSet<WarWarning> _activeWarnings = new HashSet<WarWarning>();
@@ -97,6 +103,9 @@ namespace WarfrontDirector
         private readonly Dictionary<WarfrontRole, float> _runRoleThreatSignals = new Dictionary<WarfrontRole, float>();
         private readonly List<EliteIndex> _curatedCommanderElites = new List<EliteIndex>();
         private readonly HashSet<int> _bossChallengeBuffedMasters = new HashSet<int>();
+        private readonly HashSet<int> _bossRoleControllerAttached = new HashSet<int>();
+        private readonly Dictionary<int, int> _bossPhaseReached = new Dictionary<int, int>();
+        private readonly HashSet<int> _bossEnraged = new HashSet<int>();
         private readonly Dictionary<int, float> _teleporterFogExposureByMasterId = new Dictionary<int, float>();
         private readonly HashSet<int> _teleporterFogSeenPlayerMasterIds = new HashSet<int>();
 
@@ -110,6 +119,9 @@ namespace WarfrontDirector
         private bool _teleporterBossObservedAlive;
         private bool _postBossKillRespitesEnabled;
         private bool _postBossWaveActive;
+        private bool _bossGateActive;
+        private bool _siegeTier3Announced;
+        private float _originalHoldoutRadius;
 
         private float _stageStopwatch;
         private float _windowTimer;
@@ -117,12 +129,6 @@ namespace WarfrontDirector
         private float _reconPulseTimer;
         private float _intensity;
         private float _recentPlayerDamage;
-        private float _contestDelta;
-        private float _sustainedNegativeContestSeconds;
-        private float _rollbackUsedThisAssault;
-        private float _rollbackImmunityTimer;
-        private float _assaultRollbackFloorCharge;
-        private float _breachTimer;
         private float _silentMinuteTimer;
         private float _silentMinuteBufferedPulse;
         private float _medicPulseTimer;
@@ -163,6 +169,15 @@ namespace WarfrontDirector
         private float _postBossKillRespiteCycleTimer;
         private float _pausedTeleporterCharge;
         private float _teleporterFogTickTimer;
+        private float _breachCooldownTimer;
+        private float _breachDurationTimer;
+        private float _breachPulseTimer;
+        private float _reactiveEscalationTimer;
+        private float _recentPlayerKills;
+        private float _sapperPulseTimer;
+        private float _signalJamPulseTimer;
+        private float _staggerDelayTimer;
+        private int _staggerPhase;
         private CharacterBody _hunterSquadTarget;
         private bool _teleporterChargePaused;
         private bool _teleporterFogActive;
@@ -236,6 +251,7 @@ namespace WarfrontDirector
             TeleporterInteraction.onTeleporterChargedGlobal += OnTeleporterCharged;
             TeleporterInteraction.onTeleporterFinishGlobal += OnTeleporterFinished;
             GlobalEventManager.onServerDamageDealt += OnServerDamageDealt;
+            On.RoR2.GenericSkill.OnExecute += OnSkillExecuted;
             NetworkManagerSystem.onStartClientGlobal += OnStartClient;
             NetworkManagerSystem.onStopClientGlobal += OnStopClient;
 
@@ -251,6 +267,7 @@ namespace WarfrontDirector
             TeleporterInteraction.onTeleporterChargedGlobal -= OnTeleporterCharged;
             TeleporterInteraction.onTeleporterFinishGlobal -= OnTeleporterFinished;
             GlobalEventManager.onServerDamageDealt -= OnServerDamageDealt;
+            On.RoR2.GenericSkill.OnExecute -= OnSkillExecuted;
             NetworkManagerSystem.onStartClientGlobal -= OnStartClient;
             NetworkManagerSystem.onStopClientGlobal -= OnStopClient;
 
@@ -306,7 +323,6 @@ namespace WarfrontDirector
             _stageStopwatch = 0f;
             _intensity = 6f;
             _recentPlayerDamage = 0f;
-            _contestDelta = 0f;
             _silentMinuteBufferedPulse = 0f;
             _silentMinuteTimer = 0f;
             _silentMinuteFinished = false;
@@ -358,20 +374,25 @@ namespace WarfrontDirector
             _teleporterEventActive = true;
             _assaultActive = false;
             _breachActive = false;
-            _breachTimer = 0f;
-            _sustainedNegativeContestSeconds = 0f;
-            _rollbackImmunityTimer = 0f;
-            _rollbackUsedThisAssault = 0f;
             _lastAlivePlayerCount = GetAlivePlayerCount();
             _teleporterBossObservedAlive = false;
             _postBossKillRespitesEnabled = false;
             _postBossWaveActive = false;
             _postBossKillRespiteTimer = 0f;
             _postBossKillRespiteCycleTimer = 0f;
+            _bossGateActive = true;
+            _siegeTier3Announced = false;
+
+            if (_holdoutZone != null)
+            {
+                _originalHoldoutRadius = _holdoutZone.baseRadius;
+            }
 
             BeginBreather(initial: true);
             SpawnTeleporterCommanders();
-            BroadcastWarfrontMessage("Teleporter is now contested. Hold the objective.");
+            AttachCommanderRoleControllers();
+            SetDirectorCadenceWavePause();
+            BroadcastWarfrontMessage("Teleporter activated. Defeat the boss to begin charging.");
         }
 
         private void OnTeleporterCharged(TeleporterInteraction _)
@@ -395,6 +416,9 @@ namespace WarfrontDirector
             _postBossWaveActive = false;
             _postBossKillRespiteTimer = 0f;
             _postBossKillRespiteCycleTimer = 0f;
+            _bossGateActive = false;
+            RestoreHoldoutRadius();
+            DetachCommanderRoleControllers();
             SetDirectorCadence(assault: false, recon: false);
         }
 
@@ -419,6 +443,9 @@ namespace WarfrontDirector
             _postBossWaveActive = false;
             _postBossKillRespiteTimer = 0f;
             _postBossKillRespiteCycleTimer = 0f;
+            _bossGateActive = false;
+            RestoreHoldoutRadius();
+            DetachCommanderRoleControllers();
             SetDirectorCadence(assault: false, recon: false);
             CommitStageAdaptationSignals();
             ResetRunState(clearNodes: true, restoreDirectors: true);
@@ -443,12 +470,36 @@ namespace WarfrontDirector
                 {
                     AccumulateRoleSignal(_dominantRole, dealt * 0.03f);
                 }
-
-                if (_contestDelta < -0.25f)
-                {
-                    AccumulateRoleSignal(WarfrontRole.Contester, dealt * 0.012f);
-                }
             }
+
+            if (attackerTeam == TeamIndex.Player && victimTeam != TeamIndex.Player &&
+                report.victimBody.healthComponent != null && !report.victimBody.healthComponent.alive)
+            {
+                _recentPlayerKills += 1f;
+            }
+        }
+
+        private void OnSkillExecuted(On.RoR2.GenericSkill.orig_OnExecute orig, GenericSkill self)
+        {
+            orig(self);
+
+            if (!NetworkServer.active || !_stageActive)
+            {
+                return;
+            }
+
+            if (self.baseRechargeInterval < 6f)
+            {
+                return;
+            }
+
+            var body = self.characterBody;
+            if (body == null || body.teamComponent == null || body.teamComponent.teamIndex != TeamIndex.Player)
+            {
+                return;
+            }
+
+            NotifyNearbyEnemiesCooldownExploit(body.corePosition, 30f);
         }
 
         private void ServerFixedUpdate(float deltaTime)
@@ -465,18 +516,18 @@ namespace WarfrontDirector
             TickBossChallengeBuffs(deltaTime);
             TickPostBossRespite(deltaTime);
 
-            if (_rollbackImmunityTimer > 0f)
-            {
-                _rollbackImmunityTimer = Mathf.Max(0f, _rollbackImmunityTimer - deltaTime);
-            }
-
             CleanupInvalidNodeReferences();
             ResolveTeleporterReference();
+            TickBossGate();
+            TickZoneShrink();
             TickTeleporterFog(deltaTime);
             TickCadence(deltaTime);
             TickFairness(deltaTime);
             TickContest(deltaTime);
             TickBreach(deltaTime);
+            TickReactiveEscalation(deltaTime);
+            TickSappers(deltaTime);
+            TickSignalJamming(deltaTime);
             TickMedicNet(deltaTime);
             TickIntensity(deltaTime);
             TickNetworkSync(deltaTime);
@@ -499,9 +550,20 @@ namespace WarfrontDirector
             {
                 _lastAlivePlayerCount = alivePlayers;
             }
-            else if (alivePlayers != _lastAlivePlayerCount && _mercyCooldownTimer <= 0f)
+            else if (alivePlayers < _lastAlivePlayerCount && _mercyCooldownTimer <= 0f)
             {
-                _mercyTimer = Mathf.Max(2f, WarfrontDirectorPlugin.MercyWindowSeconds.Value);
+                var teamHealthFraction = GetTeamAverageHealthFraction();
+                var mercyDuration = Mathf.Max(2f, WarfrontDirectorPlugin.MercyWindowSeconds.Value);
+                if (teamHealthFraction > 0.7f)
+                {
+                    mercyDuration *= 0.5f;
+                }
+                else if (teamHealthFraction > 0.5f)
+                {
+                    mercyDuration *= 0.75f;
+                }
+
+                _mercyTimer = mercyDuration;
                 _mercyCooldownTimer = Mathf.Max(_mercyTimer + 2f, WarfrontDirectorPlugin.MercyCooldownSeconds.Value);
                 BroadcastWarfrontMessage("Frontline destabilized. Brief recovery window.", 6f);
             }
@@ -551,6 +613,12 @@ namespace WarfrontDirector
                 return;
             }
 
+            if (_bossGateActive)
+            {
+                _assaultActive = false;
+                return;
+            }
+
             if (IsSpawnRestWindowActive())
             {
                 _assaultActive = false;
@@ -596,37 +664,52 @@ namespace WarfrontDirector
 
         private void TickContest(float deltaTime)
         {
-            _contestDelta = 0f;
-            if (!_teleporterEventActive || _holdoutZone == null || _teleporter == null || !_teleporter.isCharging || _teleporter.isCharged)
+            ReleaseTeleporterChargePause();
+        }
+
+        private void TickBossGate()
+        {
+            if (!_bossGateActive || _holdoutZone == null)
             {
-                ReleaseTeleporterChargePause();
-                _sustainedNegativeContestSeconds = Mathf.Max(0f, _sustainedNegativeContestSeconds - deltaTime * 2f);
                 return;
             }
 
-            var playerPresence = ComputePlayerPresence(_holdoutZone);
-            var enemyContestWeight = ComputeEnemyContestWeight(_holdoutZone);
+            _holdoutZone.charge = 0f;
+        }
 
-            _contestDelta = playerPresence - enemyContestWeight;
-
-            if (_contestDelta < 0f)
+        private void TickZoneShrink()
+        {
+            if (!_teleporterEventActive || _bossGateActive || _holdoutZone == null || _teleporter == null)
             {
-                var sustainedRate = _mercyTimer > 0f ? 0.5f : 1f;
-                _sustainedNegativeContestSeconds += deltaTime * sustainedRate;
-                _stageContestSignal += -_contestDelta * deltaTime;
-                AccumulateRoleSignal(WarfrontRole.Contester, -_contestDelta * 0.08f * deltaTime);
-                PauseTeleporterCharge();
-            }
-            else
-            {
-                ReleaseTeleporterChargePause();
-                _sustainedNegativeContestSeconds = Mathf.Max(0f, _sustainedNegativeContestSeconds - deltaTime * 2f);
+                return;
             }
 
-            if (_teleporter.chargeFraction >= 0.99f && playerPresence < 0.5f)
+            var chargeFraction = Mathf.Clamp01(_holdoutZone.charge);
+            var minFraction = Mathf.Clamp(WarfrontDirectorPlugin.ZoneShrinkMinPercent.Value / 100f, 0.3f, 1f);
+            var shrinkFraction = Mathf.Lerp(1f, minFraction, chargeFraction);
+            _holdoutZone.baseRadius = _originalHoldoutRadius * shrinkFraction;
+        }
+
+        private void RestoreHoldoutRadius()
+        {
+            if (_holdoutZone != null && _originalHoldoutRadius > 0f)
             {
-                _assaultPulseTimer = Mathf.Min(_assaultPulseTimer, HasWarning(WarWarning.ExecutionOrder) ? 1.1f : 1.5f);
+                _holdoutZone.baseRadius = _originalHoldoutRadius;
             }
+        }
+
+        private int GetChargeTier()
+        {
+            if (_holdoutZone == null)
+            {
+                return 0;
+            }
+
+            var charge = Mathf.Clamp01(_holdoutZone.charge);
+            if (charge >= 0.75f) return 3;
+            if (charge >= 0.50f) return 2;
+            if (charge >= 0.25f) return 1;
+            return 0;
         }
 
         private void TickTeleporterFog(float deltaTime)
@@ -867,17 +950,211 @@ namespace WarfrontDirector
 
         private void TickBreach(float deltaTime)
         {
-            if (_teleporterEventActive && !_postBossKillRespitesEnabled && !_breachActive && _sustainedNegativeContestSeconds >= WarfrontDirectorPlugin.BreachContestSeconds.Value)
+            if (!_teleporterEventActive || _bossGateActive || _postBossKillRespitesEnabled)
             {
-                StartBreach();
+                _breachCooldownTimer = 0f;
+                _breachDurationTimer = 0f;
+                _breachActive = false;
+                return;
+            }
+
+            if (_breachCooldownTimer > 0f)
+            {
+                _breachCooldownTimer = Mathf.Max(0f, _breachCooldownTimer - deltaTime);
             }
 
             if (_breachActive)
             {
-                _breachTimer -= deltaTime;
-                if (_breachTimer <= 0f)
+                _breachDurationTimer -= deltaTime;
+                _breachPulseTimer -= deltaTime;
+                if (_breachPulseTimer <= 0f)
                 {
-                    _breachActive = false;
+                    SpawnBreachPulse();
+                    _breachPulseTimer = GetBreachPulseInterval();
+                }
+
+                if (_breachDurationTimer <= 0f)
+                {
+                    EndBreach();
+                }
+
+                return;
+            }
+
+            if (_breachCooldownTimer > 0f)
+            {
+                return;
+            }
+
+            var chargeTier = GetChargeTier();
+            var breachChance = 0f;
+            if (chargeTier >= 2)
+            {
+                breachChance += 0.008f * deltaTime;
+            }
+
+            if (chargeTier >= 3)
+            {
+                breachChance += 0.012f * deltaTime;
+            }
+
+            if (HasWarning(WarWarning.SiegeEngine))
+            {
+                breachChance += 0.006f * deltaTime;
+            }
+
+            if (_currentDoctrine == WarfrontDoctrineProfile.SiegeFront)
+            {
+                breachChance += 0.005f * deltaTime;
+            }
+
+            if (_loneWolfPressure > 0.5f)
+            {
+                breachChance += 0.004f * deltaTime;
+            }
+
+            if (_reactiveEscalationTimer > 0f)
+            {
+                breachChance += 0.01f * deltaTime;
+            }
+
+            if (breachChance > 0f && UnityEngine.Random.value < breachChance)
+            {
+                StartBreach();
+            }
+        }
+
+        private void TickReactiveEscalation(float deltaTime)
+        {
+            if (!_teleporterEventActive || _bossGateActive || _postBossKillRespitesEnabled)
+            {
+                _reactiveEscalationTimer = 0f;
+                _recentPlayerKills = Mathf.Max(0f, _recentPlayerKills - deltaTime * 0.5f);
+                return;
+            }
+
+            _recentPlayerKills = Mathf.Max(0f, _recentPlayerKills - deltaTime * 0.8f);
+
+            if (_reactiveEscalationTimer > 0f)
+            {
+                _reactiveEscalationTimer = Mathf.Max(0f, _reactiveEscalationTimer - deltaTime);
+                return;
+            }
+
+            var playersDominating = _recentPlayerDamage < 5f && _recentPlayerKills > 6f;
+            var chargingFast = _holdoutZone != null && _holdoutZone.charge > 0.15f && _intensity < 30f;
+            var lowPressure = !_assaultActive && !_breachActive && _intensity < 25f && _stageStopwatch > 20f;
+
+            if (!playersDominating && !chargingFast && !lowPressure)
+            {
+                return;
+            }
+
+            _reactiveEscalationTimer = UnityEngine.Random.Range(25f, 40f);
+
+            if (playersDominating)
+            {
+                PivotDoctrine(NodeTypeCycle[UnityEngine.Random.Range(0, NodeTypeCycle.Length)]);
+                if (!_assaultActive)
+                {
+                    _windowTimer = Mathf.Min(_windowTimer, 2f);
+                }
+
+                BroadcastWarfrontMessage("Enemy command detects weakness \u2014 escalating tactics.", 5f);
+                return;
+            }
+
+            if (chargingFast)
+            {
+                var spawnCount = 2 + GetDifficultyTier();
+                var objective = GetObjectivePosition();
+                SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, spawnCount, objective, 10f, 22f, WarfrontRole.Contester);
+                SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, 1, objective, 12f, 20f, WarfrontRole.Anchor);
+                TriggerEventBuffWindow(8f, 0.22f);
+                BoostNearbyMonsterMovement(objective, 40f, 0.25f, 5f);
+                BroadcastWarfrontMessage("Enemy reinforcements rush the objective!", 5f);
+                return;
+            }
+
+            if (lowPressure && !_assaultActive)
+            {
+                _windowTimer = Mathf.Min(_windowTimer, 1f);
+                BroadcastWarfrontMessage("Enemy forces regroup and advance.", 5f);
+            }
+        }
+
+        private void TickSappers(float deltaTime)
+        {
+            if (!HasWarning(WarWarning.Sappers) || !_teleporterEventActive || _holdoutZone == null)
+            {
+                return;
+            }
+
+            _sapperPulseTimer -= deltaTime;
+            if (_sapperPulseTimer > 0f)
+            {
+                return;
+            }
+
+            _sapperPulseTimer = _assaultActive ? 4f : 6f;
+
+            var players = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            foreach (var member in players)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                if (!_holdoutZone.IsBodyInChargingRadius(body))
+                {
+                    continue;
+                }
+
+                body.AddTimedBuff(RoR2Content.Buffs.Slow60, 3.5f);
+
+                if (_assaultActive && body.healthComponent.combinedHealthFraction > 0.5f)
+                {
+                    body.AddTimedBuff(RoR2Content.Buffs.Weak, 2.5f);
+                }
+            }
+        }
+
+        private void TickSignalJamming(float deltaTime)
+        {
+            if (!HasWarning(WarWarning.SignalJamming) || !_teleporterEventActive || _holdoutZone == null)
+            {
+                return;
+            }
+
+            _signalJamPulseTimer -= deltaTime;
+            if (_signalJamPulseTimer > 0f)
+            {
+                return;
+            }
+
+            _signalJamPulseTimer = 5f;
+
+            var players = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            foreach (var member in players)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                if (!_holdoutZone.IsBodyInChargingRadius(body))
+                {
+                    continue;
+                }
+
+                body.AddTimedBuff(RoR2Content.Buffs.HealingDisabled, 3f);
+
+                if (_breachActive)
+                {
+                    body.AddTimedBuff(RoR2Content.Buffs.Cripple, 2f);
                 }
             }
         }
@@ -921,7 +1198,6 @@ namespace WarfrontDirector
         {
             var target = 12f;
             target += Mathf.Clamp(_recentPlayerDamage * 0.015f, 0f, 35f);
-            target += Mathf.Clamp(-_contestDelta * 8f, 0f, 22f);
             if (_teleporterEventActive)
             {
                 target += 10f;
@@ -930,11 +1206,6 @@ namespace WarfrontDirector
             if (_assaultActive)
             {
                 target += 24f;
-            }
-
-            if (_breachActive)
-            {
-                target += 28f;
             }
 
             if (HasWarning(WarWarning.Attrition))
@@ -1028,7 +1299,12 @@ namespace WarfrontDirector
             }
 
             _windowTimer = UnityEngine.Random.Range(min, max);
-            _rollbackUsedThisAssault = 0f;
+
+            var siegeTier = GetChargeTier();
+            var escalation = Mathf.Clamp(WarfrontDirectorPlugin.SiegeEscalationMultiplier.Value, 0.5f, 2f);
+            var breatherScale = Mathf.Lerp(1f, SiegeBreatherScale[siegeTier], escalation);
+            _windowTimer *= breatherScale;
+
             _dominantRole = WarfrontRole.None;
 
             SetDirectorCadence(assault: false, recon: false);
@@ -1037,6 +1313,8 @@ namespace WarfrontDirector
         private void BeginAssault(bool bonusCreditPulse)
         {
             _assaultActive = true;
+            _staggerPhase = 0;
+            _staggerDelayTimer = 0f;
 
             var min = 25f;
             var max = 45f;
@@ -1069,13 +1347,13 @@ namespace WarfrontDirector
 
             _windowTimer = UnityEngine.Random.Range(min, max);
             _assaultPulseTimer = 1f;
-            _sustainedNegativeContestSeconds = 0f;
             _dominantRole = ResolveDominantRole(forceRotate: true);
 
-            if (_holdoutZone != null)
+            var siegeTier = GetChargeTier();
+            if (siegeTier >= 3 && !_siegeTier3Announced)
             {
-                var rollbackCap = _holdoutZone.baseChargeDuration * (WarfrontDirectorPlugin.RollbackCapPercentPerAssault.Value / 100f);
-                _assaultRollbackFloorCharge = Mathf.Max(0f, _holdoutZone.charge - rollbackCap);
+                _siegeTier3Announced = true;
+                BroadcastWarfrontMessage("Final push \u2014 enemy forces at maximum strength.");
             }
 
             SetDirectorCadence(assault: true, recon: false);
@@ -1093,37 +1371,6 @@ namespace WarfrontDirector
 
         private void ApplyRollback(float deltaTime, float contestDelta)
         {
-            if (_holdoutZone == null || _rollbackImmunityTimer > 0f)
-            {
-                return;
-            }
-
-            var rollbackCap = _holdoutZone.baseChargeDuration * (WarfrontDirectorPlugin.RollbackCapPercentPerAssault.Value / 100f);
-            if (_rollbackUsedThisAssault >= rollbackCap)
-            {
-                _rollbackImmunityTimer = WarfrontDirectorPlugin.RollbackImmunitySeconds.Value;
-                return;
-            }
-
-            var mercyFactor = _mercyTimer > 0f ? 0.45f : 1f;
-            var rollbackPerSecond = WarfrontDirectorPlugin.RollbackRatePerNegativeDelta.Value * -contestDelta * _holdoutZone.baseChargeDuration * mercyFactor;
-            var rollbackAmount = rollbackPerSecond * deltaTime;
-            var maxRollbackThisWindow = rollbackCap - _rollbackUsedThisAssault;
-            var chargeFloorDelta = Mathf.Max(0f, _holdoutZone.charge - _assaultRollbackFloorCharge);
-
-            rollbackAmount = Mathf.Min(rollbackAmount, maxRollbackThisWindow, chargeFloorDelta);
-            if (rollbackAmount <= 0f)
-            {
-                return;
-            }
-
-            _holdoutZone.charge = Mathf.Max(_assaultRollbackFloorCharge, _holdoutZone.charge - rollbackAmount);
-            _rollbackUsedThisAssault += rollbackAmount;
-
-            if (_rollbackUsedThisAssault >= rollbackCap - 0.001f || _holdoutZone.charge <= _assaultRollbackFloorCharge + 0.001f)
-            {
-                _rollbackImmunityTimer = WarfrontDirectorPlugin.RollbackImmunitySeconds.Value;
-            }
         }
 
         private float ComputePlayerPresence(HoldoutZoneController zone)
@@ -1149,126 +1396,99 @@ namespace WarfrontDirector
 
         private float ComputeEnemyContestWeight(HoldoutZoneController zone)
         {
-            var totalWeight = 0f;
-            totalWeight += ComputeEnemyContestWeight(zone, TeamIndex.Monster);
-            totalWeight += ComputeEnemyContestWeight(zone, TeamIndex.Void);
-            totalWeight += ComputeEnemyContestWeight(zone, TeamIndex.Lunar);
-            return totalWeight;
+            return 0f;
         }
 
         private float ComputeEnemyContestWeight(HoldoutZoneController zone, TeamIndex teamIndex)
         {
-            var totalWeight = 0f;
-            var members = TeamComponent.GetTeamMembers(teamIndex);
-            foreach (var member in members)
-            {
-                var body = member ? member.body : null;
-                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
-                {
-                    continue;
-                }
-
-                if (!zone.IsBodyInChargingRadius(body))
-                {
-                    continue;
-                }
-
-                var weight = 0.6f;
-                if (body.isChampion)
-                {
-                    weight = 2.1f;
-                }
-                else if (body.isElite)
-                {
-                    weight = 1.2f;
-                }
-                else if (body.radius > 1.5f)
-                {
-                    weight = 0.9f;
-                }
-
-                if (HasWarning(WarWarning.Sappers))
-                {
-                    weight *= 1.1f;
-                }
-
-                if (HasWarning(WarWarning.PhalanxDoctrine))
-                {
-                    weight *= 1.12f;
-                }
-
-                if (AnyRelayNodeAffects(body.corePosition))
-                {
-                    weight *= 1.2f;
-                }
-
-                if (AnyNodeAffects(WarfrontNodeType.Siren, body.corePosition))
-                {
-                    weight *= 1.08f;
-                }
-
-                if (HasWarning(WarWarning.PackTactics))
-                {
-                    weight *= 1.06f;
-                }
-
-                if (HasWarning(WarWarning.ReinforcedVanguard) && (body.isChampion || body.isElite))
-                {
-                    weight *= 1.1f;
-                }
-
-                if (HasWarning(WarWarning.SignalJamming))
-                {
-                    weight *= 1.03f;
-                }
-
-                weight *= 1f + Mathf.Clamp01(_loneWolfPressure) * Mathf.Clamp(WarfrontDirectorPlugin.LoneWolfContestPenalty.Value, 0f, 0.7f);
-
-                if (_mercyTimer > 0f)
-                {
-                    weight *= 0.8f;
-                }
-
-                totalWeight += weight;
-            }
-
-            return totalWeight;
+            return 0f;
         }
 
         private void StartBreach()
         {
             _breachActive = true;
-            _breachTimer = 12f;
-            _sustainedNegativeContestSeconds = 0f;
+            _breachDurationTimer = UnityEngine.Random.Range(12f, 18f);
+            _breachPulseTimer = 0.5f;
             _stageBreachCount++;
 
-            var origin = GetObjectivePosition();
-            var heavyCount = 1 + GetForgeNodeCount();
+            var objective = GetObjectivePosition();
+            var heavyCount = 1 + Mathf.Clamp(GetDifficultyTier() - 1, 0, 2);
             if (HasWarning(WarWarning.SiegeEngine))
             {
                 heavyCount += 1;
             }
 
-            if (_operationRoll.Anomaly == WarAnomaly.IronRain)
+            SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, heavyCount, objective, 8f, 18f, WarfrontRole.Anchor);
+            SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 2 + GetDifficultyTier(), objective, 10f, 22f, WarfrontRole.Contester);
+
+            var isolated = GetMostIsolatedPlayer();
+            if (isolated != null)
             {
-                heavyCount += 1;
+                SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 2, isolated.corePosition, 12f, 20f, WarfrontRole.Hunter);
+            }
+
+            BoostNearbyMonsterMovement(objective, 50f, 0.3f, 6f);
+            TriggerEventBuffWindow(10f, 0.3f);
+            SetDirectorCadence(assault: true, recon: false);
+            BroadcastWarfrontMessage("<color=#ff3333>BREACH!</color> Enemy forces overrunning the zone!", 3f);
+        }
+
+        private void EndBreach()
+        {
+            _breachActive = false;
+            _breachCooldownTimer = UnityEngine.Random.Range(35f, 55f);
+            _breachDurationTimer = 0f;
+            _breachPulseTimer = 0f;
+
+            if (_assaultActive)
+            {
+                SetDirectorCadence(assault: true, recon: false);
+            }
+            else
+            {
+                BeginBreather(initial: false);
+            }
+
+            BroadcastWarfrontMessage("Breach repelled. Enemy regrouping.", 3f);
+        }
+
+        private void SpawnBreachPulse()
+        {
+            if (!NetworkServer.active)
+            {
+                return;
+            }
+
+            var objective = GetObjectivePosition();
+            var count = 1 + Mathf.Clamp(GetDifficultyTier(), 0, 2);
+            if (_currentDoctrine == WarfrontDoctrineProfile.SiegeFront)
+            {
+                count += 1;
+            }
+
+            var role = UnityEngine.Random.value < 0.4f ? WarfrontRole.Contester : WarfrontRole.Flanker;
+            SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, count, objective, 8f, 20f, role);
+
+            if (UnityEngine.Random.value < 0.3f + GetChargeTier() * 0.1f)
+            {
+                SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, 1, objective, 10f, 16f, WarfrontRole.Anchor);
+            }
+        }
+
+        private float GetBreachPulseInterval()
+        {
+            var interval = UnityEngine.Random.Range(3.5f, 5.5f);
+            if (HasWarning(WarWarning.SiegeEngine))
+            {
+                interval -= 0.6f;
             }
 
             if (_currentDoctrine == WarfrontDoctrineProfile.SiegeFront)
             {
-                heavyCount += 1;
-            }
-            else if (_currentDoctrine == WarfrontDoctrineProfile.SwarmFront)
-            {
-                heavyCount = Mathf.Max(1, heavyCount - 1);
+                interval -= 0.4f;
             }
 
-            heavyCount = Mathf.Clamp(heavyCount, 1, 4);
-            SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, heavyCount, origin, 9f, 17f, WarfrontRole.Anchor);
-            AccumulateRoleSignal(WarfrontRole.Anchor, 0.9f + heavyCount * 0.3f);
-            TriggerEventBuffWindow(10f, 0.24f);
-
-            BroadcastWarfrontMessage("Breach push incoming!");
+            return Mathf.Max(2f, interval);
         }
 
         private void SpawnReconPulse()
@@ -1348,7 +1568,48 @@ namespace WarfrontDirector
                 return;
             }
 
-            _dominantRole = ResolveDominantRole(forceRotate: false);
+            if (_staggerPhase == 0)
+            {
+                _dominantRole = WarfrontRole.Contester;
+                _staggerPhase = 1;
+                _staggerDelayTimer = UnityEngine.Random.Range(1.5f, 2.5f);
+            }
+            else if (_staggerPhase == 1)
+            {
+                _staggerDelayTimer -= _assaultPulseTimer;
+                if (_staggerDelayTimer > 0f)
+                {
+                    _dominantRole = WarfrontRole.Contester;
+                }
+                else
+                {
+                    _dominantRole = ResolveDominantRole(forceRotate: true);
+                    _staggerPhase = 2;
+                    _staggerDelayTimer = UnityEngine.Random.Range(2f, 3.5f);
+                }
+            }
+            else if (_staggerPhase == 2)
+            {
+                _staggerDelayTimer -= _assaultPulseTimer;
+                if (_staggerDelayTimer > 0f)
+                {
+                    _dominantRole = ResolveDominantRole(forceRotate: false);
+                }
+                else
+                {
+                    var supportRoll = UnityEngine.Random.value;
+                    _dominantRole = supportRoll < 0.35f ? WarfrontRole.Flanker
+                        : supportRoll < 0.6f ? WarfrontRole.Hunter
+                        : supportRoll < 0.8f ? WarfrontRole.Artillery
+                        : WarfrontRole.Peeler;
+                    _staggerPhase = 3;
+                }
+            }
+            else
+            {
+                _dominantRole = ResolveDominantRole(forceRotate: false);
+            }
+
             var roleBudget = Mathf.Clamp(WarfrontDirectorPlugin.RoleBudgetMultiplier.Value, 0.5f, 2f);
             var count = Mathf.RoundToInt((2 + GetDifficultyTier()) * roleBudget);
 
@@ -1404,6 +1665,9 @@ namespace WarfrontDirector
             {
                 count = Mathf.Max(1, count - 1);
             }
+
+            var siegeTier = GetChargeTier();
+            count += SiegeSpawnCountBonus[siegeTier];
 
             var objective = GetObjectivePosition();
             var isolated = GetMostIsolatedPlayer();
@@ -1525,6 +1789,8 @@ namespace WarfrontDirector
                 heavyChance -= 0.08f;
             }
 
+            heavyChance += SiegeHeavyChanceBonus[siegeTier];
+
             if (forgeNodes > 0 && UnityEngine.Random.value < Mathf.Clamp01(heavyChance))
             {
                 SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, 1, objective, 14f, 20f, WarfrontRole.Anchor);
@@ -1559,9 +1825,11 @@ namespace WarfrontDirector
                 return;
             }
 
+            var playerClumped = IsPlayerTeamClumped();
+
             for (var i = 0; i < count; i++)
             {
-                var prefab = pool[UnityEngine.Random.Range(0, pool.Count)];
+                var prefab = PickWeightedPrefab(pool, roleHint, playerClumped);
                 if (!prefab)
                 {
                     continue;
@@ -1590,6 +1858,114 @@ namespace WarfrontDirector
                     AttachRoleController(spawnedMaster, roleHint);
                 }
             }
+        }
+
+        private GameObject PickWeightedPrefab(IReadOnlyList<GameObject> pool, WarfrontRole roleHint, bool playerClumped)
+        {
+            if (pool.Count <= 1)
+            {
+                return pool.Count == 1 ? pool[0] : null;
+            }
+
+            var weights = new float[pool.Count];
+            var totalWeight = 0f;
+
+            for (var i = 0; i < pool.Count; i++)
+            {
+                var prefab = pool[i];
+                if (!prefab)
+                {
+                    weights[i] = 0f;
+                    continue;
+                }
+
+                var weight = 1f;
+                var prefabName = prefab.name.ToUpperInvariant();
+                var isRanged = prefabName.Contains("WISP") || prefabName.Contains("GOLEM");
+                var isFast = prefabName.Contains("LEMURIAN") || prefabName.Contains("WISP");
+                var isSwarm = prefabName.Contains("BEETLE") || prefabName.Contains("LEMURIAN");
+
+                switch (roleHint)
+                {
+                    case WarfrontRole.Artillery:
+                        if (isRanged) weight += 1.5f;
+                        break;
+                    case WarfrontRole.Hunter:
+                    case WarfrontRole.Flanker:
+                        if (isFast) weight += 1.2f;
+                        break;
+                    case WarfrontRole.Contester:
+                    case WarfrontRole.Anchor:
+                        if (!isFast) weight += 0.8f;
+                        break;
+                    case WarfrontRole.Peeler:
+                        if (isSwarm) weight += 0.6f;
+                        break;
+                }
+
+                if (playerClumped && isRanged)
+                {
+                    weight += 0.8f;
+                }
+
+                if (!playerClumped && isFast)
+                {
+                    weight += 0.6f;
+                }
+
+                weights[i] = Mathf.Max(0.2f, weight);
+                totalWeight += weights[i];
+            }
+
+            if (totalWeight <= 0f)
+            {
+                return pool[UnityEngine.Random.Range(0, pool.Count)];
+            }
+
+            var roll = UnityEngine.Random.Range(0f, totalWeight);
+            for (var i = 0; i < pool.Count; i++)
+            {
+                roll -= weights[i];
+                if (roll <= 0f)
+                {
+                    return pool[i];
+                }
+            }
+
+            return pool[pool.Count - 1];
+        }
+
+        private bool IsPlayerTeamClumped()
+        {
+            var players = TeamComponent.GetTeamMembers(TeamIndex.Player)
+                .Select(m => m ? m.body : null)
+                .Where(b => b != null && b.healthComponent != null && b.healthComponent.alive)
+                .ToList();
+
+            if (players.Count <= 1)
+            {
+                return true;
+            }
+
+            var center = Vector3.zero;
+            foreach (var p in players)
+            {
+                center += p.corePosition;
+            }
+
+            center /= players.Count;
+
+            var maxDistSqr = 0f;
+            foreach (var p in players)
+            {
+                var distSqr = (p.corePosition - center).sqrMagnitude;
+                if (distSqr > maxDistSqr)
+                {
+                    maxDistSqr = distSqr;
+                }
+            }
+
+            return maxDistSqr < 20f * 20f;
         }
 
         private void BoostNearbyMonsterMovement(Vector3 origin, float radius, float boostMultiplier, float duration)
@@ -1694,6 +2070,15 @@ namespace WarfrontDirector
                     continue;
                 }
 
+                var commanderRole = ResolveCommanderRole(commanderType);
+                var commanderRoleController = master.GetComponent<WarfrontRoleController>();
+                if (!commanderRoleController)
+                {
+                    commanderRoleController = master.gameObject.AddComponent<WarfrontRoleController>();
+                }
+
+                commanderRoleController.Initialize(this, master, commanderRole, _currentDoctrine, isCommander: true);
+
                 var commandZonePosition = EnsureSpawnOutsideTeleporterRadius(master, position);
                 ApplyCommanderEliteAffix(master, commanderType);
 
@@ -1709,10 +2094,9 @@ namespace WarfrontDirector
                     master,
                     commandZonePosition,
                     effectRadius: GetCommanderEffectRadius(commanderType),
-                    tetherDistance: Mathf.Max(24f, WarfrontDirectorPlugin.CommanderTetherDistance.Value));
+                    tetherDistance: Mathf.Max(20f, WarfrontDirectorPlugin.CommanderTetherDistance.Value * 0.6f));
 
                 _activeNodes.Add(node);
-                AttachRoleController(master, ResolveCommanderRole(commanderType));
             }
         }
 
@@ -1883,11 +2267,11 @@ namespace WarfrontDirector
         {
             return nodeType switch
             {
-                WarfrontNodeType.Relay => 34f,
-                WarfrontNodeType.Forge => 30f,
-                WarfrontNodeType.Siren => 28f,
-                WarfrontNodeType.SpawnCache => 32f,
-                _ => 30f
+                WarfrontNodeType.Relay => 42f,
+                WarfrontNodeType.Forge => 38f,
+                WarfrontNodeType.Siren => 36f,
+                WarfrontNodeType.SpawnCache => 40f,
+                _ => 36f
             };
         }
 
@@ -1905,34 +2289,10 @@ namespace WarfrontDirector
 
         private GameObject PickCommanderPrefab(WarfrontNodeType nodeType)
         {
-            switch (nodeType)
+            var pool = WarfrontAssetCatalog.CommanderMasterPrefabs;
+            if (pool.Count > 0)
             {
-                case WarfrontNodeType.Forge:
-                    if (WarfrontAssetCatalog.HeavyMasterPrefabs.Count > 0)
-                    {
-                        return WarfrontAssetCatalog.HeavyMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.HeavyMasterPrefabs.Count)];
-                    }
-
-                    break;
-                case WarfrontNodeType.Siren:
-                    if (WarfrontAssetCatalog.AssaultMasterPrefabs.Count > 0)
-                    {
-                        return WarfrontAssetCatalog.AssaultMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.AssaultMasterPrefabs.Count)];
-                    }
-
-                    break;
-                case WarfrontNodeType.SpawnCache:
-                    if (WarfrontAssetCatalog.ReconMasterPrefabs.Count > 0)
-                    {
-                        return WarfrontAssetCatalog.ReconMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.ReconMasterPrefabs.Count)];
-                    }
-
-                    break;
-            }
-
-            if (WarfrontAssetCatalog.AssaultMasterPrefabs.Count > 0)
-            {
-                return WarfrontAssetCatalog.AssaultMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.AssaultMasterPrefabs.Count)];
+                return pool[UnityEngine.Random.Range(0, pool.Count)];
             }
 
             if (WarfrontAssetCatalog.HeavyMasterPrefabs.Count > 0)
@@ -1940,9 +2300,9 @@ namespace WarfrontDirector
                 return WarfrontAssetCatalog.HeavyMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.HeavyMasterPrefabs.Count)];
             }
 
-            if (WarfrontAssetCatalog.ReconMasterPrefabs.Count > 0)
+            if (WarfrontAssetCatalog.AssaultMasterPrefabs.Count > 0)
             {
-                return WarfrontAssetCatalog.ReconMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.ReconMasterPrefabs.Count)];
+                return WarfrontAssetCatalog.AssaultMasterPrefabs[UnityEngine.Random.Range(0, WarfrontAssetCatalog.AssaultMasterPrefabs.Count)];
             }
 
             return null;
@@ -2259,13 +2619,14 @@ namespace WarfrontDirector
                 return;
             }
 
+            var siegeTier = GetChargeTier();
             var snapshot = new WarfrontHudSnapshot
             {
                 Active = WarfrontDirectorPlugin.Enabled.Value && _stageActive,
                 DominantRole = _dominantRole,
                 Doctrine = _currentDoctrine,
                 Intensity = _intensity,
-                ContestDelta = _contestDelta,
+                ContestDelta = siegeTier,
                 ChargeFraction = _teleporter ? _teleporter.chargeFraction : 0f,
                 AssaultActive = _assaultActive,
                 BreachActive = _breachActive,
@@ -2275,7 +2636,7 @@ namespace WarfrontDirector
                 OperationSummary = _operationSummary,
                 ActiveCommanders = GetActiveCommanderCount(),
                 CommanderTypeMask = BuildCommanderTypeMask(),
-                ContestColor = _contestDelta >= 0f ? new Color(0.36f, 0.85f, 0.46f) : new Color(0.95f, 0.3f, 0.26f)
+                ContestColor = GetSiegeTierColor(siegeTier)
             };
 
             snapshot.Phase = ResolvePhase(snapshot.Intensity);
@@ -2304,7 +2665,7 @@ namespace WarfrontDirector
                 DominantRole = (byte)_dominantRole,
                 Doctrine = (byte)_currentDoctrine,
                 Intensity = _intensity,
-                ContestDelta = _contestDelta,
+                ContestDelta = GetChargeTier(),
                 ChargeFraction = _teleporter ? _teleporter.chargeFraction : 0f,
                 AssaultActive = _assaultActive,
                 BreachActive = _breachActive,
@@ -2346,7 +2707,18 @@ namespace WarfrontDirector
                 ActiveCommanders = message.ActiveCommanderCount,
                 CommanderTypeMask = message.CommanderTypeMask,
                 OperationSummary = $"{ToDisplayName((WarfrontDoctrineProfile)Mathf.Clamp(message.Doctrine, 0, (byte)WarfrontDoctrineProfile.DisruptionFront))} | {ToDisplayName((WarWarning)message.WarningOne)}, {ToDisplayName((WarWarning)message.WarningTwo)} - {ToDisplayName((WarAnomaly)message.Anomaly)}",
-                ContestColor = message.ContestDelta >= 0f ? new Color(0.36f, 0.85f, 0.46f) : new Color(0.95f, 0.3f, 0.26f)
+                ContestColor = GetSiegeTierColor(Mathf.RoundToInt(message.ContestDelta))
+            };
+        }
+
+        private static Color GetSiegeTierColor(int tier)
+        {
+            return tier switch
+            {
+                0 => new Color(0.36f, 0.85f, 0.46f),
+                1 => new Color(0.95f, 0.88f, 0.30f),
+                2 => new Color(0.95f, 0.55f, 0.20f),
+                _ => new Color(0.95f, 0.25f, 0.20f)
             };
         }
 
@@ -2388,17 +2760,15 @@ namespace WarfrontDirector
             _breachActive = false;
             _falseLullPending = false;
             _silentMinuteFinished = false;
+            _bossGateActive = false;
+            _siegeTier3Announced = false;
+            _originalHoldoutRadius = 0f;
 
             _windowTimer = 0f;
             _assaultPulseTimer = 0f;
             _reconPulseTimer = 0f;
             _intensity = 0f;
-            _contestDelta = 0f;
             _recentPlayerDamage = 0f;
-            _sustainedNegativeContestSeconds = 0f;
-            _rollbackUsedThisAssault = 0f;
-            _rollbackImmunityTimer = 0f;
-            _assaultRollbackFloorCharge = 0f;
             _medicPulseTimer = 4f;
             _silentMinuteTimer = 0f;
             _silentMinuteBufferedPulse = 0f;
@@ -2447,6 +2817,9 @@ namespace WarfrontDirector
             _lastBroadcastTime = -100f;
             _curatedCommanderElites.Clear();
             _bossChallengeBuffedMasters.Clear();
+            _bossRoleControllerAttached.Clear();
+            _bossPhaseReached.Clear();
+            _bossEnraged.Clear();
             _stageRoleSignals.Clear();
             foreach (var role in RoleRotation)
             {
@@ -2815,10 +3188,33 @@ namespace WarfrontDirector
 
         private void ApplyCommanderEliteAffix(CharacterMaster master, WarfrontNodeType nodeType)
         {
-            if (!master || master.inventory == null)
+            if (!master)
             {
                 return;
             }
+
+            var body = master.GetBody();
+            ApplyDoctrineBuffPackage(body, _currentDoctrine);
+            ApplyRoleBuffPackage(body, ResolveCommanderRole(nodeType));
+            if (body != null)
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 14f + GetDifficultyTier() * 2f);
+                body.healthComponent?.HealFraction(0.12f, default);
+            }
+
+            if (master.inventory == null)
+            {
+                return;
+            }
+
+            var diffTier = GetDifficultyTier();
+            var stageCount = Run.instance != null ? Run.instance.stageClearCount : 0;
+            var hpStacks = 30 + diffTier * 8 + stageCount * 4;
+            var dmgStacks = 10 + diffTier * 3 + stageCount * 2;
+            master.inventory.GiveItem(RoR2Content.Items.BoostHp, hpStacks);
+            master.inventory.GiveItem(RoR2Content.Items.BoostDamage, dmgStacks);
+            master.inventory.GiveItem(RoR2Content.Items.AdaptiveArmor, 1);
+            master.inventory.GiveItem(RoR2Content.Items.Knurl, 2 + diffTier);
 
             var eliteIndex = PickCuratedCommanderElite(nodeType);
             if (eliteIndex == EliteIndex.None)
@@ -2833,11 +3229,6 @@ namespace WarfrontDirector
             }
 
             master.inventory.SetEquipmentIndex(eliteDef.eliteEquipmentDef.equipmentIndex);
-
-            var body = master.GetBody();
-            ApplyDoctrineBuffPackage(body, _currentDoctrine);
-            ApplyRoleBuffPackage(body, ResolveCommanderRole(nodeType));
-            body?.AddTimedBuff(RoR2Content.Buffs.Warbanner, 8f + GetDifficultyTier() * 1.2f);
         }
 
         private bool IsSpawnRestWindowActive()
@@ -2882,7 +3273,17 @@ namespace WarfrontDirector
 
         private void BeginPostBossKillRespite(bool initial)
         {
-            var restDuration = initial ? 6f : 7f;
+            var restMin = initial ? 4.5f : 3.5f;
+            var restMax = initial ? 7f : 6f;
+
+            var teamHealth = GetTeamAverageHealthFraction();
+            if (teamHealth > 0.75f)
+            {
+                restMin -= 1f;
+                restMax -= 1.5f;
+            }
+
+            var restDuration = UnityEngine.Random.Range(Mathf.Max(2f, restMin), Mathf.Max(3f, restMax));
 
             _postBossWaveActive = false;
             _postBossKillRespiteTimer = restDuration;
@@ -2900,9 +3301,29 @@ namespace WarfrontDirector
 
         private void BeginPostBossKillWave(bool initial)
         {
-            var waveDuration = initial ? 14f : 11f;
+            var waveMin = initial ? 11f : 8f;
+            var waveMax = initial ? 16f : 13f;
+
+            if (HasWarning(WarWarning.Attrition))
+            {
+                waveMin += 2f;
+                waveMax += 2f;
+            }
+
+            if (_currentDoctrine == WarfrontDoctrineProfile.SiegeFront)
+            {
+                waveMin += 1f;
+                waveMax += 1.5f;
+            }
+
+            var waveDuration = UnityEngine.Random.Range(waveMin, waveMax);
             var openingPulseCount = initial ? 2 : 1;
             openingPulseCount += Mathf.Clamp(GetDifficultyTier() - 1, 0, 1);
+
+            if (UnityEngine.Random.value < 0.25f)
+            {
+                openingPulseCount += 1;
+            }
 
             _postBossWaveActive = true;
             _postBossKillRespiteTimer = 0f;
@@ -2911,10 +3332,12 @@ namespace WarfrontDirector
             _breachActive = false;
             _windowTimer = waveDuration;
             _assaultPulseTimer = Mathf.Max(0.75f, GetAssaultPulseInterval() * 0.6f);
+            _staggerPhase = 0;
+            _staggerDelayTimer = 0f;
             _dominantRole = ResolveDominantRole(forceRotate: true);
 
             SetDirectorCadence(assault: true, recon: false);
-            TriggerEventBuffWindow(initial ? 8f : 6f, 0.16f);
+            TriggerEventBuffWindow(initial ? 8f : 6f, 0.16f + UnityEngine.Random.Range(0f, 0.08f));
 
             for (var i = 0; i < openingPulseCount; i++)
             {
@@ -2950,13 +3373,158 @@ namespace WarfrontDirector
             if (aliveBossCount > 0)
             {
                 _teleporterBossObservedAlive = true;
+                TickBossPhases();
                 return;
             }
 
             if (_teleporterBossObservedAlive && !_postBossKillRespitesEnabled)
             {
                 _postBossKillRespitesEnabled = true;
+
+                if (_bossGateActive)
+                {
+                    _bossGateActive = false;
+                    ReleaseTeleporterChargePause();
+                    BroadcastWarfrontMessage("Boss eliminated. Charge unlocked.");
+                }
+
                 BeginPostBossKillWave(initial: true);
+            }
+        }
+
+        private void TickBossPhases()
+        {
+            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            foreach (var teamIndex in teams)
+            {
+                var members = TeamComponent.GetTeamMembers(teamIndex);
+                foreach (var member in members)
+                {
+                    var body = member ? member.body : null;
+                    if (body == null || body.healthComponent == null || !body.healthComponent.alive || !body.isBoss)
+                    {
+                        continue;
+                    }
+
+                    var master = body.master;
+                    if (master == null)
+                    {
+                        continue;
+                    }
+
+                    var masterId = master.GetInstanceID();
+                    var healthFraction = body.healthComponent.combinedHealthFraction;
+
+                    if (!_bossPhaseReached.TryGetValue(masterId, out var phase))
+                    {
+                        phase = 0;
+                        _bossPhaseReached[masterId] = 0;
+                    }
+
+                    if (phase < 1 && healthFraction <= 0.75f)
+                    {
+                        _bossPhaseReached[masterId] = 1;
+                        OnBossPhaseReached(body, 1);
+                    }
+
+                    if (phase < 2 && healthFraction <= 0.50f)
+                    {
+                        _bossPhaseReached[masterId] = 2;
+                        OnBossPhaseReached(body, 2);
+                    }
+
+                    if (phase < 3 && healthFraction <= 0.25f)
+                    {
+                        _bossPhaseReached[masterId] = 3;
+                        OnBossPhaseReached(body, 3);
+                    }
+
+                    if (!_bossEnraged.Contains(masterId) && healthFraction <= 0.40f)
+                    {
+                        _bossEnraged.Add(masterId);
+                        OnBossEnrage(body, master);
+                    }
+
+                    RefreshBossPeriodicBuffs(body);
+                }
+            }
+        }
+
+        private void OnBossPhaseReached(CharacterBody bossBody, int phase)
+        {
+            var objective = GetObjectivePosition();
+            var diffTier = GetDifficultyTier();
+            var bossPos = bossBody.corePosition;
+
+            switch (phase)
+            {
+                case 1:
+                    SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 2 + diffTier, bossPos, 8f, 16f, WarfrontRole.Contester);
+                    BoostNearbyMonsterMovement(objective, 40f, 0.2f, 5f);
+                    BroadcastWarfrontMessage("<color=#ffaa00>Boss calls reinforcements!</color>", 3f);
+                    break;
+                case 2:
+                    SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, 1 + Mathf.Clamp(diffTier - 1, 0, 2), bossPos, 6f, 14f, WarfrontRole.Anchor);
+                    SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 3 + diffTier, bossPos, 8f, 18f, WarfrontRole.Contester);
+                    var isolated = GetMostIsolatedPlayer();
+                    if (isolated != null)
+                    {
+                        SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 2, isolated.corePosition, 10f, 18f, WarfrontRole.Hunter);
+                    }
+                    TriggerEventBuffWindow(10f, 0.3f);
+                    BoostNearbyMonsterMovement(objective, 50f, 0.3f, 6f);
+                    BroadcastWarfrontMessage("<color=#ff6600>Boss at half health \u2014 enemy forces surge!</color>", 3f);
+                    break;
+                case 3:
+                    SpawnMonsterPack(WarfrontAssetCatalog.HeavyMasterPrefabs, 2 + Mathf.Clamp(diffTier, 0, 2), bossPos, 6f, 14f, WarfrontRole.Anchor);
+                    SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 4 + diffTier, objective, 6f, 16f, WarfrontRole.Contester);
+                    SpawnMonsterPack(WarfrontAssetCatalog.AssaultMasterPrefabs, 2, objective, 12f, 24f, WarfrontRole.Flanker);
+                    TriggerEventBuffWindow(12f, 0.35f);
+                    BoostNearbyMonsterMovement(objective, 60f, 0.4f, 8f);
+                    BroadcastWarfrontMessage("<color=#ff3333>Boss desperate \u2014 all enemy reserves committed!</color>", 3f);
+                    break;
+            }
+        }
+
+        private void OnBossEnrage(CharacterBody body, CharacterMaster master)
+        {
+            if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+            {
+                return;
+            }
+
+            body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, 45f);
+            body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 45f);
+            body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 45f);
+            body.AddTimedBuff(RoR2Content.Buffs.CloakSpeed, 30f);
+            body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 45f);
+
+            if (master != null && master.inventory != null)
+            {
+                var diffTier = GetDifficultyTier();
+                master.inventory.GiveItem(RoR2Content.Items.BoostDamage, 5 + diffTier * 2);
+                master.inventory.GiveItem(RoR2Content.Items.BoostHp, 10 + diffTier * 3);
+            }
+
+            body.healthComponent.HealFraction(0.10f, default);
+            BroadcastWarfrontMessage("<color=#ff0000>BOSS ENRAGED!</color> Increased damage and speed.", 3f);
+        }
+
+        private static void RefreshBossPeriodicBuffs(CharacterBody body)
+        {
+            if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+            {
+                return;
+            }
+
+            if (!body.HasBuff(RoR2Content.Buffs.Warbanner))
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 8f);
+            }
+
+            if (!body.HasBuff(RoR2Content.Buffs.ArmorBoost))
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 6f);
             }
         }
 
@@ -2989,13 +3557,19 @@ namespace WarfrontDirector
             var masterId = master.GetInstanceID();
             if (_bossChallengeBuffedMasters.Contains(masterId))
             {
+                EnsureBossRoleController(master);
                 return true;
             }
 
             if (master.inventory == null)
             {
+                EnsureBossRoleController(master);
                 return true;
             }
+
+            var diffTier = GetDifficultyTier();
+            var stageCount = Run.instance != null ? Run.instance.stageClearCount : 0;
+            var alivePlayers = Mathf.Max(1, GetAlivePlayerCount());
 
             var eliteIndex = PickBossChallengeElite(out var challengeLabel);
             var eliteDef = eliteIndex != EliteIndex.None ? EliteCatalog.GetEliteDef(eliteIndex) : null;
@@ -3004,15 +3578,51 @@ namespace WarfrontDirector
                 master.inventory.SetEquipmentIndex(eliteDef.eliteEquipmentDef.equipmentIndex);
             }
 
+            var hpStacks = 40 + diffTier * 12 + stageCount * 6 + alivePlayers * 5;
+            var dmgStacks = 8 + diffTier * 4 + stageCount * 2 + alivePlayers * 2;
+            master.inventory.GiveItem(RoR2Content.Items.BoostHp, hpStacks);
+            master.inventory.GiveItem(RoR2Content.Items.BoostDamage, dmgStacks);
+            master.inventory.GiveItem(RoR2Content.Items.AdaptiveArmor, 1);
+            master.inventory.GiveItem(RoR2Content.Items.Knurl, 3 + diffTier);
+
             var body = master.GetBody();
             if (body != null && body.healthComponent != null && body.healthComponent.alive)
             {
-                body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6f + GetDifficultyTier() * 1.2f);
+                body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 20f + diffTier * 3f);
+                body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 15f + diffTier * 2f);
+                body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 12f + diffTier * 2f);
+                body.healthComponent.HealFraction(0.15f, default);
             }
 
             _bossChallengeBuffedMasters.Add(masterId);
+            _bossPhaseReached[masterId] = 0;
+            EnsureBossRoleController(master);
             BroadcastWarfrontMessage($"Enemy command primes boss with {challengeLabel} doctrine.", 2.5f);
             return true;
+        }
+
+        private void EnsureBossRoleController(CharacterMaster master)
+        {
+            if (master == null)
+            {
+                return;
+            }
+
+            var masterId = master.GetInstanceID();
+            if (_bossRoleControllerAttached.Contains(masterId))
+            {
+                return;
+            }
+
+            _bossRoleControllerAttached.Add(masterId);
+
+            var controller = master.GetComponent<WarfrontRoleController>();
+            if (!controller)
+            {
+                controller = master.gameObject.AddComponent<WarfrontRoleController>();
+            }
+
+            controller.Initialize(this, master, WarfrontRole.Anchor, _currentDoctrine, isCommander: false, isBoss: true);
         }
 
         private EliteIndex PickBossChallengeElite(out string challengeLabel)
@@ -3023,7 +3633,7 @@ namespace WarfrontDirector
                 return FindCuratedEliteByToken("OVERLOADING");
             }
 
-            if (HasWarning(WarWarning.PhalanxDoctrine) || _currentDoctrine == WarfrontDoctrineProfile.SiegeFront || _contestDelta > 0.55f)
+            if (HasWarning(WarWarning.PhalanxDoctrine) || _currentDoctrine == WarfrontDoctrineProfile.SiegeFront)
             {
                 challengeLabel = "Glacial";
                 return FindCuratedEliteByToken("GLACIAL");
@@ -3322,21 +3932,33 @@ namespace WarfrontDirector
                 return;
             }
 
-            var duration = doctrine switch
+            switch (doctrine)
             {
-                WarfrontDoctrineProfile.SiegeFront => 7.5f,
-                WarfrontDoctrineProfile.ArtilleryFront => 6.8f,
-                WarfrontDoctrineProfile.HunterCell => 6.4f,
-                WarfrontDoctrineProfile.SwarmFront => 6.2f,
-                WarfrontDoctrineProfile.DisruptionFront => 6.6f,
-                _ => 6f
-            };
-
-            body.AddTimedBuff(RoR2Content.Buffs.Warbanner, duration);
-
-            if (doctrine == WarfrontDoctrineProfile.SiegeFront || doctrine == WarfrontDoctrineProfile.DisruptionFront)
-            {
-                body.healthComponent.HealFraction(0.015f, default);
+                case WarfrontDoctrineProfile.SiegeFront:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 7.5f);
+                    body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 7.5f);
+                    body.healthComponent.HealFraction(0.025f, default);
+                    break;
+                case WarfrontDoctrineProfile.ArtilleryFront:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.8f);
+                    body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 6.8f);
+                    break;
+                case WarfrontDoctrineProfile.HunterCell:
+                    body.AddTimedBuff(RoR2Content.Buffs.CloakSpeed, 6.4f);
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.4f);
+                    break;
+                case WarfrontDoctrineProfile.SwarmFront:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.2f);
+                    body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, 5f);
+                    break;
+                case WarfrontDoctrineProfile.DisruptionFront:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.6f);
+                    body.AddTimedBuff(RoR2Content.Buffs.Energized, 6.6f);
+                    body.healthComponent.HealFraction(0.015f, default);
+                    break;
+                default:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6f);
+                    break;
             }
         }
 
@@ -3347,22 +3969,38 @@ namespace WarfrontDirector
                 return;
             }
 
-            var duration = role switch
+            switch (role)
             {
-                WarfrontRole.Contester => 6.8f,
-                WarfrontRole.Artillery => 6.5f,
-                WarfrontRole.Flanker => 6.4f,
-                WarfrontRole.Peeler => 6.2f,
-                WarfrontRole.Hunter => 6.1f,
-                WarfrontRole.Anchor => 7.2f,
-                _ => 5.8f
-            };
-
-            body.AddTimedBuff(RoR2Content.Buffs.Warbanner, duration);
-
-            if (role == WarfrontRole.Anchor || role == WarfrontRole.Contester)
-            {
-                body.healthComponent.HealFraction(0.012f, default);
+                case WarfrontRole.Contester:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.8f);
+                    body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 6.8f);
+                    body.healthComponent.HealFraction(0.015f, default);
+                    break;
+                case WarfrontRole.Artillery:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.5f);
+                    body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 6.5f);
+                    break;
+                case WarfrontRole.Flanker:
+                    body.AddTimedBuff(RoR2Content.Buffs.CloakSpeed, 6.4f);
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.4f);
+                    break;
+                case WarfrontRole.Peeler:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.2f);
+                    body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, 5.5f);
+                    break;
+                case WarfrontRole.Hunter:
+                    body.AddTimedBuff(RoR2Content.Buffs.CloakSpeed, 6.1f);
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 6.1f);
+                    body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, 5f);
+                    break;
+                case WarfrontRole.Anchor:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 7.2f);
+                    body.AddTimedBuff(RoR2Content.Buffs.ArmorBoost, 7.2f);
+                    body.healthComponent.HealFraction(0.02f, default);
+                    break;
+                default:
+                    body.AddTimedBuff(RoR2Content.Buffs.Warbanner, 5.8f);
+                    break;
             }
         }
 
@@ -3375,6 +4013,16 @@ namespace WarfrontDirector
 
             var finalDuration = Mathf.Clamp(duration * (1f + Mathf.Clamp(magnitude, 0f, 0.65f)), 3f, 16f);
             body.AddTimedBuff(RoR2Content.Buffs.Warbanner, finalDuration);
+
+            if (magnitude >= 0.2f)
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.WarCryBuff, finalDuration * 0.7f);
+            }
+
+            if (magnitude >= 0.25f)
+            {
+                body.AddTimedBuff(RoR2Content.Buffs.PowerBuff, finalDuration * 0.5f);
+            }
         }
 
         private void AttachRoleController(CharacterMaster master, WarfrontRole role)
@@ -3391,6 +4039,36 @@ namespace WarfrontDirector
             }
 
             controller.Initialize(this, master, role, _currentDoctrine);
+        }
+
+        private void AttachCommanderRoleControllers()
+        {
+            foreach (var node in _activeNodes)
+            {
+                if (node == null || !node.IsActive || node.Master == null)
+                {
+                    continue;
+                }
+
+                AttachRoleController(node.Master, ResolveCommanderRole(node.NodeType));
+            }
+        }
+
+        private void DetachCommanderRoleControllers()
+        {
+            foreach (var node in _activeNodes)
+            {
+                if (node == null || node.Master == null)
+                {
+                    continue;
+                }
+
+                var controller = node.Master.GetComponent<WarfrontRoleController>();
+                if (controller)
+                {
+                    Destroy(controller);
+                }
+            }
         }
 
         internal Vector3 GetObjectivePositionForAI()
@@ -3431,6 +4109,101 @@ namespace WarfrontDirector
             return isolated ?? weakest;
         }
 
+        internal Vector3 GetNearestCommanderPositionForAI(Vector3 origin)
+        {
+            Vector3 nearest = Vector3.zero;
+            var nearestDistSqr = float.MaxValue;
+            foreach (var node in _activeNodes)
+            {
+                if (node == null || !node.IsActive)
+                {
+                    continue;
+                }
+
+                var pos = node.CommandZonePosition;
+                var distSqr = (pos - origin).sqrMagnitude;
+                if (distSqr < nearestDistSqr)
+                {
+                    nearestDistSqr = distSqr;
+                    nearest = pos;
+                }
+            }
+
+            return nearest;
+        }
+
+        private void NotifyNearbyEnemiesCooldownExploit(Vector3 origin, float radius)
+        {
+            var radiusSqr = radius * radius;
+            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            foreach (var teamIndex in teams)
+            {
+                var members = TeamComponent.GetTeamMembers(teamIndex);
+                foreach (var member in members)
+                {
+                    var body = member ? member.body : null;
+                    if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                    {
+                        continue;
+                    }
+
+                    if ((body.corePosition - origin).sqrMagnitude > radiusSqr)
+                    {
+                        continue;
+                    }
+
+                    var master = body.master;
+                    if (master == null)
+                    {
+                        continue;
+                    }
+
+                    var rc = master.GetComponent<WarfrontRoleController>();
+                    if (rc != null)
+                    {
+                        rc.OnNearbyPlayerBigHit(body);
+                    }
+                }
+            }
+        }
+
+        internal int CountRoleEnemiesNearPosition(Vector3 position, float radius, WarfrontRole role)
+        {
+            var radiusSqr = radius * radius;
+            var count = 0;
+            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            foreach (var teamIndex in teams)
+            {
+                var members = TeamComponent.GetTeamMembers(teamIndex);
+                foreach (var member in members)
+                {
+                    if (!member || member.body == null)
+                    {
+                        continue;
+                    }
+
+                    if ((member.body.corePosition - position).sqrMagnitude > radiusSqr)
+                    {
+                        continue;
+                    }
+
+                    var master = member.body.master;
+                    if (master == null)
+                    {
+                        continue;
+                    }
+
+                    var rc = master.GetComponent<WarfrontRoleController>();
+                    if (rc != null && rc.AssignedRole == role)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count;
+        }
+
         internal Vector3 GetFlankPointForAI(Vector3 seekerPosition)
         {
             var objective = GetObjectivePosition();
@@ -3448,10 +4221,56 @@ namespace WarfrontDirector
                 baseline = Vector3.forward;
             }
 
-            var lateral = Vector3.Cross(Vector3.up, baseline.normalized);
-            var side = UnityEngine.Random.value < 0.5f ? -1f : 1f;
-            var raw = objective + lateral * side * UnityEngine.Random.Range(14f, 24f);
+            var enemyCenter = GetEnemyCenterNearObjective(objective, 50f);
+            var enemyBias = enemyCenter - objective;
+            enemyBias.y = 0f;
+
+            Vector3 flankDirection;
+            if (enemyBias.sqrMagnitude > 4f)
+            {
+                flankDirection = -enemyBias.normalized;
+                var jitter = Quaternion.AngleAxis(UnityEngine.Random.Range(-40f, 40f), Vector3.up);
+                flankDirection = (jitter * flankDirection).normalized;
+            }
+            else
+            {
+                var lateral = Vector3.Cross(Vector3.up, baseline.normalized);
+                var side = UnityEngine.Random.value < 0.5f ? -1f : 1f;
+                flankDirection = lateral * side;
+            }
+
+            var raw = objective + flankDirection * UnityEngine.Random.Range(16f, 28f);
             return FindGroundedPosition(raw, 2f, 7f);
+        }
+
+        private Vector3 GetEnemyCenterNearObjective(Vector3 objective, float radius)
+        {
+            var radiusSqr = radius * radius;
+            var total = Vector3.zero;
+            var count = 0;
+            var teams = new[] { TeamIndex.Monster, TeamIndex.Void, TeamIndex.Lunar };
+            foreach (var teamIndex in teams)
+            {
+                var members = TeamComponent.GetTeamMembers(teamIndex);
+                foreach (var member in members)
+                {
+                    var body = member ? member.body : null;
+                    if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                    {
+                        continue;
+                    }
+
+                    if ((body.corePosition - objective).sqrMagnitude > radiusSqr)
+                    {
+                        continue;
+                    }
+
+                    total += body.corePosition;
+                    count++;
+                }
+            }
+
+            return count > 0 ? total / count : objective;
         }
 
         private int GetActiveCommanderCount()
@@ -3569,6 +4388,26 @@ namespace WarfrontDirector
             return alive;
         }
 
+        private float GetTeamAverageHealthFraction()
+        {
+            var total = 0f;
+            var count = 0;
+            var players = TeamComponent.GetTeamMembers(TeamIndex.Player);
+            foreach (var member in players)
+            {
+                var body = member ? member.body : null;
+                if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                {
+                    continue;
+                }
+
+                total += body.healthComponent.combinedHealthFraction;
+                count++;
+            }
+
+            return count > 0 ? total / count : 0f;
+        }
+
         private float GetAssaultPulseInterval()
         {
             var min = 5.1f;
@@ -3636,7 +4475,11 @@ namespace WarfrontDirector
             min = Mathf.Max(2.8f, min);
             max = Mathf.Max(min + 0.8f, max);
 
-            return UnityEngine.Random.Range(min, max);
+            var interval = UnityEngine.Random.Range(min, max);
+            var siegeTier = GetChargeTier();
+            var escalation = Mathf.Clamp(WarfrontDirectorPlugin.SiegeEscalationMultiplier.Value, 0.5f, 2f);
+            interval *= Mathf.Lerp(1f, SiegePulseIntervalScale[siegeTier], escalation);
+            return interval;
         }
 
         private WarfrontRole ResolveDominantRole(bool forceRotate)
@@ -3668,7 +4511,7 @@ namespace WarfrontDirector
                 role = WarfrontRole.Hunter;
             }
 
-            if (HasWarning(WarWarning.PhalanxDoctrine) && _contestDelta > 0.5f && UnityEngine.Random.value < 0.35f)
+            if (HasWarning(WarWarning.PhalanxDoctrine) && UnityEngine.Random.value < 0.35f)
             {
                 role = WarfrontRole.Contester;
             }

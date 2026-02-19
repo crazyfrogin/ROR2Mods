@@ -1,8 +1,8 @@
 ﻿{
 	"name": "MuscleMemory",
-	"version_number": "1.0.0",
+	"version_number": "2.0.0",
 	"website_url": "",
-	"description": "Run-scoped logarithmic skill-slot mastery with tiny slot-based bonuses.",
+	"description": "Run-scoped logarithmic skill-slot mastery with multi-tier milestones, color-coded HUD, progress bars, and configurable bonuses.",
 	"dependencies": [
 		"bbepis-BepInExPack-5.4.2108",
 		"RiskofThunder-HookGenPatcher-1.2.3"
