@@ -405,6 +405,7 @@ namespace WarfrontDirector
                 _originalHoldoutRadius = _holdoutZone.baseRadius;
             }
 
+            RelocateExistingCommandersToObjective();
             BeginBreather(initial: true);
             SpawnTeleporterCommanders();
             AttachCommanderRoleControllers();
@@ -1275,6 +1276,16 @@ namespace WarfrontDirector
                         continue;
                     }
 
+                    var medicMaster = body.master;
+                    if (medicMaster != null)
+                    {
+                        var medicRc = medicMaster.GetComponent<WarfrontRoleController>();
+                        if (medicRc != null && medicRc.IsCommander)
+                        {
+                            continue;
+                        }
+                    }
+
                     if (_holdoutZone.IsBodyInChargingRadius(body))
                     {
                         body.healthComponent.HealFraction(0.07f, default);
@@ -2110,6 +2121,27 @@ namespace WarfrontDirector
 
             SpawnCommanderGroup(stageEntryCount, aroundObjective: false);
             BroadcastWarfrontMessage($"Enemy command deployed ({stageEntryCount}/{_stageCommanderQuota}).", 2.5f);
+        }
+
+        private void RelocateExistingCommandersToObjective()
+        {
+            var objective = GetObjectivePosition();
+            if (objective == Vector3.zero)
+            {
+                return;
+            }
+
+            foreach (var node in _activeNodes)
+            {
+                if (node == null || !node.IsActive)
+                {
+                    continue;
+                }
+
+                var offset = UnityEngine.Random.insideUnitSphere * 18f;
+                offset.y = 0f;
+                node.RelocateCommandZone(objective + offset);
+            }
         }
 
         private void SpawnTeleporterCommanders()
@@ -4184,6 +4216,12 @@ namespace WarfrontDirector
             foreach (var node in _activeNodes)
             {
                 if (node == null || !node.IsActive || node.Master == null)
+                {
+                    continue;
+                }
+
+                var existing = node.Master.GetComponent<WarfrontRoleController>();
+                if (existing != null && existing.IsCommander)
                 {
                     continue;
                 }

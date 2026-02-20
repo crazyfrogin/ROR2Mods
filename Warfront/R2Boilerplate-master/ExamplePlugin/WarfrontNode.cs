@@ -25,6 +25,7 @@ namespace WarfrontDirector
         private float _idleTimer;
         private float _enrageTimer;
         private float _regenTimer;
+        private float _lastTrackedHealth;
         private bool _enraged;
         private bool _frenzied;
         private float _tetherDistance = DefaultTetherDistance;
@@ -51,6 +52,12 @@ namespace WarfrontDirector
             _regenTimer = 0f;
             _enraged = false;
             _frenzied = false;
+            _lastTrackedHealth = -1f;
+        }
+
+        internal void RelocateCommandZone(Vector3 newPosition)
+        {
+            _commandZonePosition = newPosition;
         }
 
         internal bool AffectsPosition(Vector3 position)
@@ -99,6 +106,7 @@ namespace WarfrontDirector
             }
 
             var deltaTime = Time.fixedDeltaTime;
+            ClampCommanderHealth(body);
             TickTether(body, deltaTime);
             TickAura(body, deltaTime);
             TickAntiKite(body, deltaTime);
@@ -187,6 +195,11 @@ namespace WarfrontDirector
                 {
                     var body = member ? member.body : null;
                     if (body == null || body.healthComponent == null || !body.healthComponent.alive)
+                    {
+                        continue;
+                    }
+
+                    if (body == commanderBody)
                     {
                         continue;
                     }
@@ -305,6 +318,29 @@ namespace WarfrontDirector
             else
             {
                 body.AddTimedBuff(RoR2Content.Buffs.Warbanner, EnragePulseInterval + 0.3f);
+            }
+        }
+
+        private void ClampCommanderHealth(CharacterBody body)
+        {
+            var hc = body.healthComponent;
+            if (hc == null)
+            {
+                return;
+            }
+
+            var currentHealth = hc.health;
+            if (_lastTrackedHealth < 0f)
+            {
+                _lastTrackedHealth = currentHealth;
+            }
+            else if (currentHealth > _lastTrackedHealth)
+            {
+                hc.health = _lastTrackedHealth;
+            }
+            else
+            {
+                _lastTrackedHealth = currentHealth;
             }
         }
 

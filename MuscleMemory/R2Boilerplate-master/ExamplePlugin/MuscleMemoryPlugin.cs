@@ -32,8 +32,8 @@ namespace MuscleMemory
 
             _milestones = new MilestoneSystem(_config);
             _progression = new ProgressionManager(_config, _milestones);
-            _statHooks = new StatHooks(_config, _progression, _milestones);
             _networkSync = new NetworkSync(_config, _progression);
+            _statHooks = new StatHooks(_config, _progression, _milestones, _networkSync);
             _skillHud = new SkillHud(_config, _progression);
 
             _statHooks.Register();
@@ -47,12 +47,14 @@ namespace MuscleMemory
         {
             _statHooks.Unregister();
             _networkSync.UnregisterClientMessageHandler();
+            _networkSync.UnregisterServerMessageHandler();
             UnhookLateJoin();
         }
 
         private void FixedUpdate()
         {
             _networkSync.TryRegisterClientMessageHandler();
+            _networkSync.TryRegisterServerMessageHandler();
 
             if (_trackedRun != Run.instance)
             {

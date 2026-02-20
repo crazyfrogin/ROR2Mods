@@ -9,12 +9,14 @@ namespace MuscleMemory
     internal sealed class NetworkSync
     {
         private const short SkillSyncMessageType = 14097;
+        private const short SkillActivationNotifyType = 14098;
 
         private readonly MuscleMemoryConfig _config;
         private readonly ProgressionManager _progression;
 
         private NetworkClient _registeredClient;
         private bool _clientHandlerRegistered;
+        private bool _serverHandlerRegistered;
         private float _nextReplicationAt;
 
         internal NetworkSync(MuscleMemoryConfig config, ProgressionManager progression)
@@ -37,6 +39,94 @@ namespace MuscleMemory
         internal void ResetReplicationTimer()
         {
             _nextReplicationAt = 0f;
+        }
+
+        internal void TryRegisterServerMessageHandler()
+        {
+            if (!NetworkServer.active)
+            {
+                if (_serverHandlerRegistered)
+                {
+                    UnregisterServerMessageHandler();
+                }
+
+                return;
+            }
+
+            if (_serverHandlerRegistered)
+            {
+                return;
+            }
+
+            NetworkServer.RegisterHandler(SkillActivationNotifyType, OnServerSkillActivationReceived);
+            _serverHandlerRegistered = true;
+        }
+
+        internal void UnregisterServerMessageHandler()
+        {
+            if (!_serverHandlerRegistered)
+            {
+                return;
+            }
+
+            if (NetworkServer.active)
+            {
+                NetworkServer.UnregisterHandler(SkillActivationNotifyType);
+            }
+
+            _serverHandlerRegistered = false;
+        }
+
+        internal void SendSkillActivationToServer(NetworkInstanceId masterNetId, SkillSlotKind slot)
+        {
+            if (NetworkServer.active)
+            {
+                return;
+            }
+
+            if (_registeredClient == null || !_registeredClient.isConnected)
+            {
+                return;
+            }
+
+            var message = new SkillActivationNotifyMessage
+            {
+                MasterNetId = masterNetId,
+                SlotIndex = (int)slot
+            };
+
+            _registeredClient.Send(SkillActivationNotifyType, message);
+        }
+
+        private void OnServerSkillActivationReceived(NetworkMessage networkMessage)
+        {
+            SkillActivationNotifyMessage message = networkMessage.ReadMessage<SkillActivationNotifyMessage>();
+
+            int slotIndex = message.SlotIndex;
+            if (slotIndex < 0 || slotIndex >= Constants.SlotCount)
+            {
+                return;
+            }
+
+            GameObject masterObject = NetworkServer.FindLocalObject(message.MasterNetId);
+            if (masterObject == null)
+            {
+                return;
+            }
+
+            CharacterMaster master = masterObject.GetComponent<CharacterMaster>();
+            if (master == null || !master.playerCharacterMasterController)
+            {
+                return;
+            }
+
+            PlayerProgressState state = _progression.GetOrCreateProgressState(master);
+            SkillSlotKind slot = (SkillSlotKind)slotIndex;
+            float now = Time.fixedTime;
+
+            state.LastActivatedSlot = slot;
+            state.LastActivatedTime = now;
+            state.Slots[slotIndex].LastActivatedTime = now;
         }
 
         internal void TryRegisterClientMessageHandler()
@@ -231,6 +321,24 @@ namespace MuscleMemory
             state.Progress[(int)SkillSlotKind.Utility] = message.UtilityProgress;
             state.Progress[(int)SkillSlotKind.Special] = message.SpecialProgress;
             state.FlowActive = message.FlowActive;
+        }
+
+        private sealed class SkillActivationNotifyMessage : MessageBase
+        {
+            internal NetworkInstanceId MasterNetId;
+            internal int SlotIndex;
+
+            public override void Serialize(NetworkWriter writer)
+            {
+                writer.Write(MasterNetId);
+                writer.Write(SlotIndex);
+            }
+
+            public override void Deserialize(NetworkReader reader)
+            {
+                MasterNetId = reader.ReadNetworkId();
+                SlotIndex = reader.ReadInt32();
+            }
         }
 
         private sealed class SkillStateSyncMessage : MessageBase

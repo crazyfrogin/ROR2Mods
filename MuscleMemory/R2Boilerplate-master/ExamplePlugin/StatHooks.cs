@@ -10,12 +10,14 @@ namespace MuscleMemory
         private readonly MuscleMemoryConfig _config;
         private readonly ProgressionManager _progression;
         private readonly MilestoneSystem _milestones;
+        private readonly NetworkSync _networkSync;
 
-        internal StatHooks(MuscleMemoryConfig config, ProgressionManager progression, MilestoneSystem milestones)
+        internal StatHooks(MuscleMemoryConfig config, ProgressionManager progression, MilestoneSystem milestones, NetworkSync networkSync)
         {
             _config = config;
             _progression = progression;
             _milestones = milestones;
+            _networkSync = networkSync;
         }
 
         internal void Register()
@@ -39,13 +41,22 @@ namespace MuscleMemory
         private bool GenericSkill_ExecuteIfReady(On.RoR2.GenericSkill.orig_ExecuteIfReady orig, GenericSkill self)
         {
             bool result = orig(self);
-            if (result && NetworkServer.active && self != null && self.characterBody != null)
+            if (result && self != null && self.characterBody != null)
             {
                 CharacterBody body = self.characterBody;
-                if (_progression.TryGetTrackedState(body, out PlayerProgressState state)
-                    && ProgressionManager.TryResolveSlot(body, self, out SkillSlotKind slot))
+                if (ProgressionManager.TryResolveSlot(body, self, out SkillSlotKind slot))
                 {
-                    _progression.OnSkillActivated(state, body, slot, Time.fixedTime);
+                    if (NetworkServer.active)
+                    {
+                        if (_progression.TryGetTrackedState(body, out PlayerProgressState state))
+                        {
+                            _progression.OnSkillActivated(state, body, slot, Time.fixedTime);
+                        }
+                    }
+                    else if (body.master != null)
+                    {
+                        _networkSync.SendSkillActivationToServer(body.master.netId, slot);
+                    }
                 }
             }
 
