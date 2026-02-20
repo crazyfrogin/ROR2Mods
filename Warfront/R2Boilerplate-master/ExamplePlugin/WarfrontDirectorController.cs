@@ -266,6 +266,7 @@ namespace WarfrontDirector
             GlobalEventManager.onServerDamageDealt += OnServerDamageDealt;
             On.RoR2.GenericSkill.OnExecute += OnSkillExecuted;
             On.RoR2.HealthComponent.Heal += OnHealthComponentHeal;
+            On.RoR2.CharacterBody.RecalculateStats += OnRecalculateStats;
             NetworkManagerSystem.onStartClientGlobal += OnStartClient;
             NetworkManagerSystem.onStopClientGlobal += OnStopClient;
 
@@ -283,6 +284,7 @@ namespace WarfrontDirector
             GlobalEventManager.onServerDamageDealt -= OnServerDamageDealt;
             On.RoR2.GenericSkill.OnExecute -= OnSkillExecuted;
             On.RoR2.HealthComponent.Heal -= OnHealthComponentHeal;
+            On.RoR2.CharacterBody.RecalculateStats -= OnRecalculateStats;
             NetworkManagerSystem.onStartClientGlobal -= OnStartClient;
             NetworkManagerSystem.onStopClientGlobal -= OnStopClient;
 
@@ -533,6 +535,30 @@ namespace WarfrontDirector
             }
 
             return orig(self, amount, procChainMask, nonRegen);
+        }
+
+        private void OnRecalculateStats(On.RoR2.CharacterBody.orig_RecalculateStats orig, CharacterBody self)
+        {
+            orig(self);
+
+            if (self == null)
+            {
+                return;
+            }
+
+            var master = self.master;
+            if (master == null)
+            {
+                return;
+            }
+
+            var rc = master.GetComponent<WarfrontRoleController>();
+            if (rc != null && rc.IsCommander)
+            {
+                self.baseRegen = 0f;
+                self.levelRegen = 0f;
+                self.regen = 0f;
+            }
         }
 
         private void ServerFixedUpdate(float deltaTime)

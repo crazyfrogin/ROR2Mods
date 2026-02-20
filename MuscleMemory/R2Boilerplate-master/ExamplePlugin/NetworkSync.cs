@@ -21,6 +21,17 @@ namespace MuscleMemory
         {
             _config = config;
             _progression = progression;
+            _progression.OnAnyLevelChanged += OnLevelChanged;
+        }
+
+        private void OnLevelChanged()
+        {
+            if (!NetworkServer.active)
+            {
+                return;
+            }
+
+            BroadcastProgressSnapshotsToClients(Time.fixedTime);
         }
 
         internal void ResetReplicationTimer()

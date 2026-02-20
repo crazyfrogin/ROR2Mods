@@ -11,6 +11,8 @@ namespace MuscleMemory
         private readonly MuscleMemoryConfig _config;
         private readonly MilestoneSystem _milestones;
 
+        internal Action OnAnyLevelChanged;
+
         internal readonly Dictionary<CharacterMaster, PlayerProgressState> PlayerStates =
             new Dictionary<CharacterMaster, PlayerProgressState>();
 
@@ -286,6 +288,8 @@ namespace MuscleMemory
 
                     Log.Info($"{playerName} {slot} reached level {nextLevel} (P={slotProgress.Proficiency:0.0}).");
                 }
+
+                OnAnyLevelChanged?.Invoke();
             }
         }
 
@@ -376,17 +380,20 @@ namespace MuscleMemory
 
         internal void OnSkillActivated(PlayerProgressState state, CharacterBody body, SkillSlotKind slot, float now)
         {
-            state.LastActivatedSlot = slot;
-            state.LastActivatedTime = now;
-            state.Slots[(int)slot].LastActivatedTime = now;
-
             // Grant flat activation XP so every skill use generates some progress,
             // even for skills that deal no damage (utility dashes, shields, etc.).
+            // Skip if this slot was already activated this exact frame (prevents
+            // double XP when both the ExecuteIfReady hook and stock detection fire).
             float activationXp = Mathf.Max(0f, _config.ActivationFlatXp.Value);
-            if (activationXp > 0f)
+            bool alreadyActivatedThisFrame = state.Slots[(int)slot].LastActivatedTime == now;
+            if (activationXp > 0f && !alreadyActivatedThisFrame)
             {
                 AddProficiency(state, slot, activationXp);
             }
+
+            state.LastActivatedSlot = slot;
+            state.LastActivatedTime = now;
+            state.Slots[(int)slot].LastActivatedTime = now;
 
             if (slot == SkillSlotKind.Utility)
             {
@@ -557,20 +564,16 @@ namespace MuscleMemory
             int previousStock = state.GetLastStock(slot);
             int currentStock = skill.stock;
 
-            // Stock-based detection is a FALLBACK only — the ExecuteIfReady hook is
-            // the authoritative source for skill activations.  We only trigger here
-            // if the hook somehow missed it (e.g. a skill that bypasses ExecuteIfReady).
+            // Stock-based detection MUST always fire because for non-host players
+            // the ExecuteIfReady hook does not run on the server (RoR2 uses
+            // client-authoritative skill execution).  Activation XP dedup is
+            // handled inside OnSkillActivated by checking the per-slot timestamp.
             if (currentStock < previousStock)
             {
-                // Only fire if the hook didn't already handle this activation this frame.
-                float timeSinceSlotActivation = now - state.Slots[(int)slot].LastActivatedTime;
-                if (timeSinceSlotActivation > Time.fixedDeltaTime * 2f)
+                int activations = previousStock - currentStock;
+                for (int i = 0; i < activations; i++)
                 {
-                    int activations = previousStock - currentStock;
-                    for (int i = 0; i < activations; i++)
-                    {
-                        OnSkillActivated(state, body, slot, now);
-                    }
+                    OnSkillActivated(state, body, slot, now);
                 }
             }
 

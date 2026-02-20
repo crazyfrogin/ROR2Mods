@@ -181,6 +181,8 @@ namespace WarfrontDirector
                 _bossIsEnraged = true;
             }
 
+            ForceBossAITarget(body);
+
             _targetOverrideTimer -= deltaTime;
             if (_targetOverrideTimer <= 0f)
             {
@@ -212,6 +214,35 @@ namespace WarfrontDirector
             TickBossSteering(body, deltaTime);
         }
 
+        private void ForceBossAITarget(CharacterBody body)
+        {
+            var ai = _master.GetComponent<BaseAI>();
+            if (ai == null)
+            {
+                return;
+            }
+
+            if (_bossCurrentTarget != null && _bossCurrentTarget.healthComponent != null && _bossCurrentTarget.healthComponent.alive)
+            {
+                ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
+                ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
+                ai.enemyAttention = BossAggroSwitchInterval + 1f;
+                return;
+            }
+
+            var currentAITarget = ai.currentEnemy.gameObject != null ? ai.currentEnemy.gameObject.GetComponent<CharacterBody>() : null;
+            if (currentAITarget != null && !IsPlayerBody(currentAITarget))
+            {
+                _bossCurrentTarget = SelectBossTarget(body);
+                if (_bossCurrentTarget != null)
+                {
+                    ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
+                    ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
+                    ai.enemyAttention = BossAggroSwitchInterval + 1f;
+                }
+            }
+        }
+
         private void TickBossTargetOverride(CharacterBody body)
         {
             var ai = _master.GetComponent<BaseAI>();
@@ -226,7 +257,7 @@ namespace WarfrontDirector
             {
                 ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
                 ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
-                ai.enemyAttention = BossAggroSwitchInterval;
+                ai.enemyAttention = BossAggroSwitchInterval + 1f;
                 return;
             }
 
@@ -239,7 +270,7 @@ namespace WarfrontDirector
 
             ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
             ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
-            ai.enemyAttention = BossAggroSwitchInterval + 0.5f;
+            ai.enemyAttention = BossAggroSwitchInterval + 1f;
         }
 
         private CharacterBody SelectBossTarget(CharacterBody self)
@@ -360,6 +391,11 @@ namespace WarfrontDirector
                 return;
             }
 
+            if (body.characterMotor != null && !body.characterMotor.isGrounded)
+            {
+                return;
+            }
+
             var toTarget = _bossCurrentTarget.corePosition - body.corePosition;
             toTarget.y = 0f;
             var distance = toTarget.magnitude;
@@ -370,8 +406,8 @@ namespace WarfrontDirector
             }
 
             var leapDirection = toTarget.normalized;
-            var upForce = _bossIsEnraged ? BossLeapForce * 0.7f : BossLeapForce * 0.55f;
-            var forwardForce = _bossIsEnraged ? BossLeapForce * 1.3f : BossLeapForce;
+            var upForce = _bossIsEnraged ? 12f : 8f;
+            var forwardForce = _bossIsEnraged ? 28f : 22f;
 
             if (body.characterMotor != null)
             {
