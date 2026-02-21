@@ -125,19 +125,19 @@ namespace MuscleMemory
                 "Flat proficiency granted each time a skill is activated, so skills that deal no damage (utility dashes, shields) still progress.");
 
             // Bonuses
-            PrimaryDamagePerLevel = config.Bind("Bonuses", "PrimaryDamagePerLevel", 0.01f,
+            PrimaryDamagePerLevel = config.Bind("Bonuses", "PrimaryDamagePerLevel", 0.03f,
                 "Damage multiplier per primary level.");
-            SecondaryCooldownReductionPerLevel = config.Bind("Bonuses", "SecondaryCooldownReductionPerLevel", 0.01f,
+            SecondaryCooldownReductionPerLevel = config.Bind("Bonuses", "SecondaryCooldownReductionPerLevel", 0.025f,
                 "Cooldown reduction per secondary level.");
-            UtilityCooldownReductionPerLevel = config.Bind("Bonuses", "UtilityCooldownReductionPerLevel", 0.012f,
+            UtilityCooldownReductionPerLevel = config.Bind("Bonuses", "UtilityCooldownReductionPerLevel", 0.03f,
                 "Cooldown reduction per utility level.");
-            SpecialCooldownReductionPerLevel = config.Bind("Bonuses", "SpecialCooldownReductionPerLevel", 0.008f,
+            SpecialCooldownReductionPerLevel = config.Bind("Bonuses", "SpecialCooldownReductionPerLevel", 0.02f,
                 "Cooldown reduction per special level.");
-            UtilityFlowMoveSpeedBonus = config.Bind("Bonuses", "UtilityFlowMoveSpeedBonus", 0.08f,
+            UtilityFlowMoveSpeedBonus = config.Bind("Bonuses", "UtilityFlowMoveSpeedBonus", 0.15f,
                 "Temporary move speed bonus after utility use.");
             UtilityFlowDurationSeconds = config.Bind("Bonuses", "UtilityFlowDurationSeconds", 1.25f,
                 "Duration of utility flow movement bonus.");
-            SpecialBarrierFraction = config.Bind("Bonuses", "SpecialBarrierFraction", 0.02f,
+            SpecialBarrierFraction = config.Bind("Bonuses", "SpecialBarrierFraction", 0.04f,
                 "Barrier fraction of full combined health granted on special cast.");
 
             // Cold Start
@@ -171,55 +171,55 @@ namespace MuscleMemory
             // Milestones - Primary
             PrimaryMilestone1Level = config.Bind("Milestones.Primary", "Tier1Level", 5,
                 "Primary tier-1 milestone: grants bonus crit chance on primary-attributed hits.");
-            PrimaryMilestone1CritChance = config.Bind("Milestones.Primary", "Tier1CritChance", 10f,
+            PrimaryMilestone1CritChance = config.Bind("Milestones.Primary", "Tier1CritChance", 15f,
                 "Crit chance (percent) added by the primary tier-1 milestone.");
             PrimaryMilestone2Level = config.Bind("Milestones.Primary", "Tier2Level", 10,
                 "Primary tier-2 milestone: primary hits inflict bleed.");
-            PrimaryMilestone2BleedDuration = config.Bind("Milestones.Primary", "Tier2BleedDuration", 3f,
+            PrimaryMilestone2BleedDuration = config.Bind("Milestones.Primary", "Tier2BleedDuration", 4.5f,
                 "Bleed duration (seconds) applied by the primary tier-2 milestone.");
             PrimaryMilestone3Level = config.Bind("Milestones.Primary", "Tier3Level", 15,
                 "Primary tier-3 milestone: grants bonus attack speed.");
-            PrimaryMilestone3AttackSpeedBonus = config.Bind("Milestones.Primary", "Tier3AttackSpeedBonus", 0.15f,
+            PrimaryMilestone3AttackSpeedBonus = config.Bind("Milestones.Primary", "Tier3AttackSpeedBonus", 0.25f,
                 "Attack speed bonus granted by the primary tier-3 milestone.");
 
             // Milestones - Secondary
             SecondaryMilestone1Level = config.Bind("Milestones.Secondary", "Tier1Level", 5,
                 "Secondary tier-1 milestone: grants bonus cooldown reduction.");
-            SecondaryMilestone1CooldownReduction = config.Bind("Milestones.Secondary", "Tier1CooldownReduction", 0.03f,
+            SecondaryMilestone1CooldownReduction = config.Bind("Milestones.Secondary", "Tier1CooldownReduction", 0.06f,
                 "Flat cooldown reduction from the secondary tier-1 milestone.");
             SecondaryMilestone2Level = config.Bind("Milestones.Secondary", "Tier2Level", 10,
                 "Secondary tier-2 milestone: kills during attribution window refund a stock.");
             SecondaryMilestone3Level = config.Bind("Milestones.Secondary", "Tier3Level", 15,
                 "Secondary tier-3 milestone: grants further cooldown reduction.");
-            SecondaryMilestone3CooldownReduction = config.Bind("Milestones.Secondary", "Tier3CooldownReduction", 0.05f,
+            SecondaryMilestone3CooldownReduction = config.Bind("Milestones.Secondary", "Tier3CooldownReduction", 0.10f,
                 "Flat cooldown reduction from the secondary tier-3 milestone.");
 
             // Milestones - Utility
             UtilityMilestone1Level = config.Bind("Milestones.Utility", "Tier1Level", 5,
                 "Utility tier-1 milestone: grants additional flow move speed.");
-            UtilityMilestone1FlowBonus = config.Bind("Milestones.Utility", "Tier1FlowBonus", 0.1f,
+            UtilityMilestone1FlowBonus = config.Bind("Milestones.Utility", "Tier1FlowBonus", 0.18f,
                 "Additional move speed bonus during flow from the utility tier-1 milestone.");
             UtilityMilestone2Level = config.Bind("Milestones.Utility", "Tier2Level", 10,
                 "Utility tier-2 milestone: grants armor during flow.");
-            UtilityMilestone2ArmorBonus = config.Bind("Milestones.Utility", "Tier2ArmorBonus", 30f,
+            UtilityMilestone2ArmorBonus = config.Bind("Milestones.Utility", "Tier2ArmorBonus", 50f,
                 "Armor bonus during flow from the utility tier-2 milestone.");
             UtilityMilestone3Level = config.Bind("Milestones.Utility", "Tier3Level", 15,
                 "Utility tier-3 milestone: extends flow duration.");
-            UtilityMilestone3FlowDurationExtension = config.Bind("Milestones.Utility", "Tier3FlowDurationExtension", 0.75f,
+            UtilityMilestone3FlowDurationExtension = config.Bind("Milestones.Utility", "Tier3FlowDurationExtension", 1.25f,
                 "Additional seconds added to flow duration from the utility tier-3 milestone.");
 
             // Milestones - Special
             SpecialMilestone1Level = config.Bind("Milestones.Special", "Tier1Level", 5,
                 "Special tier-1 milestone: grants bonus barrier on special cast.");
-            SpecialMilestone1BarrierBonus = config.Bind("Milestones.Special", "Tier1BarrierBonus", 0.02f,
+            SpecialMilestone1BarrierBonus = config.Bind("Milestones.Special", "Tier1BarrierBonus", 0.04f,
                 "Additional barrier fraction from the special tier-1 milestone.");
             SpecialMilestone2Level = config.Bind("Milestones.Special", "Tier2Level", 10,
                 "Special tier-2 milestone: special cast reduces all other skill cooldowns.");
-            SpecialMilestone2CooldownRefund = config.Bind("Milestones.Special", "Tier2CooldownRefund", 0.15f,
+            SpecialMilestone2CooldownRefund = config.Bind("Milestones.Special", "Tier2CooldownRefund", 0.25f,
                 "Fraction of remaining cooldown refunded on other skills when special is cast.");
             SpecialMilestone3Level = config.Bind("Milestones.Special", "Tier3Level", 15,
                 "Special tier-3 milestone: grants a larger barrier bonus.");
-            SpecialMilestone3BarrierBonus = config.Bind("Milestones.Special", "Tier3BarrierBonus", 0.04f,
+            SpecialMilestone3BarrierBonus = config.Bind("Milestones.Special", "Tier3BarrierBonus", 0.07f,
                 "Additional barrier fraction from the special tier-3 milestone.");
 
             // Decay

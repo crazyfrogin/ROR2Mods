@@ -37,6 +37,7 @@ namespace WarfrontDirector
         private const float BossLeapCheckInterval = 1.2f;
         private const float BossLeapMinDistance = 18f;
         private const float BossLeapForce = 65f;
+        private const float BossMaxHeightAboveObjective = 35f;
 
         private WarfrontDirectorController _owner;
         private CharacterMaster _master;
@@ -182,6 +183,7 @@ namespace WarfrontDirector
             }
 
             ForceBossAITarget(body);
+            TickBossHeightClamp(body);
 
             _targetOverrideTimer -= deltaTime;
             if (_targetOverrideTimer <= 0f)
@@ -222,7 +224,8 @@ namespace WarfrontDirector
                 return;
             }
 
-            if (_bossCurrentTarget != null && _bossCurrentTarget.healthComponent != null && _bossCurrentTarget.healthComponent.alive)
+            if (_bossCurrentTarget != null && _bossCurrentTarget.healthComponent != null && _bossCurrentTarget.healthComponent.alive
+                && IsPlayerBody(_bossCurrentTarget))
             {
                 ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
                 ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
@@ -230,16 +233,47 @@ namespace WarfrontDirector
                 return;
             }
 
-            var currentAITarget = ai.currentEnemy.gameObject != null ? ai.currentEnemy.gameObject.GetComponent<CharacterBody>() : null;
-            if (currentAITarget != null && !IsPlayerBody(currentAITarget))
+            _bossCurrentTarget = SelectBossTarget(body);
+            if (_bossCurrentTarget != null)
             {
-                _bossCurrentTarget = SelectBossTarget(body);
-                if (_bossCurrentTarget != null)
+                ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
+                ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
+                ai.enemyAttention = BossAggroSwitchInterval + 1f;
+            }
+        }
+
+        private void TickBossHeightClamp(CharacterBody body)
+        {
+            var objective = _owner.GetObjectivePositionForAI();
+            var maxY = objective.y + BossMaxHeightAboveObjective;
+            var currentY = body.corePosition.y;
+
+            if (currentY <= maxY)
+            {
+                return;
+            }
+
+            var pullDownForce = (currentY - maxY) * 3f;
+
+            if (body.characterMotor != null)
+            {
+                var vel = body.characterMotor.velocity;
+                if (vel.y > 0f)
                 {
-                    ai.currentEnemy.gameObject = _bossCurrentTarget.gameObject;
-                    ai.currentEnemy.bestHurtBox = _bossCurrentTarget.mainHurtBox;
-                    ai.enemyAttention = BossAggroSwitchInterval + 1f;
+                    vel.y = 0f;
                 }
+                vel.y -= pullDownForce;
+                body.characterMotor.velocity = vel;
+            }
+            else if (body.rigidbody != null)
+            {
+                var vel = body.rigidbody.velocity;
+                if (vel.y > 0f)
+                {
+                    vel.y = 0f;
+                }
+                vel.y -= pullDownForce;
+                body.rigidbody.velocity = vel;
             }
         }
 

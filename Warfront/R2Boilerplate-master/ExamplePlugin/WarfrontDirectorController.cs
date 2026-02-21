@@ -195,6 +195,7 @@ namespace WarfrontDirector
         private CharacterBody _hunterSquadTarget;
         private bool _teleporterChargePaused;
         private bool _teleporterFogActive;
+        private bool _teleporterCommandersSpawned;
 
         private TeleporterInteraction _teleporter;
         private HoldoutZoneController _holdoutZone;
@@ -405,9 +406,9 @@ namespace WarfrontDirector
                 _originalHoldoutRadius = _holdoutZone.baseRadius;
             }
 
+            _teleporterCommandersSpawned = false;
             RelocateExistingCommandersToObjective();
             BeginBreather(initial: true);
-            SpawnTeleporterCommanders();
             AttachCommanderRoleControllers();
             SetDirectorCadenceWavePause();
             BroadcastWarfrontMessage("Teleporter activated. Defeat the boss to begin charging.");
@@ -579,6 +580,7 @@ namespace WarfrontDirector
             CleanupInvalidNodeReferences();
             ResolveTeleporterReference();
             TickBossGate();
+            TickDeferredCommanderSpawn();
             TickZoneShrink();
             TickTeleporterFog(deltaTime);
             TickCadence(deltaTime);
@@ -735,6 +737,23 @@ namespace WarfrontDirector
             }
 
             _holdoutZone.charge = 0f;
+        }
+
+        private void TickDeferredCommanderSpawn()
+        {
+            if (_teleporterCommandersSpawned || !_teleporterEventActive || _bossGateActive || _holdoutZone == null)
+            {
+                return;
+            }
+
+            if (_holdoutZone.charge < 0.50f)
+            {
+                return;
+            }
+
+            _teleporterCommandersSpawned = true;
+            SpawnTeleporterCommanders();
+            AttachCommanderRoleControllers();
         }
 
         private void TickZoneShrink()
