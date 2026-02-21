@@ -322,6 +322,9 @@ namespace DeckDuel.Match
             }
             Log.Info($">>> StartGame: {_players.Count} players, {_decks.Count} decks, tiebreak={tiebreak}");
 
+            // Lock the deck builder now that the match is starting
+            DeckDuelPlugin.Instance.DeckBuilderUI?.OnMatchStarted();
+
             GameNumber++;
             IsTiebreak = tiebreak;
             Phase = tiebreak ? MatchPhase.Tiebreak : MatchPhase.Active;

@@ -35,7 +35,7 @@ namespace DeckDuel.UI
         private Canvas _canvas;
         private Deck _currentDeck = new Deck();
         private bool _isVisible;
-        private bool _inCharacterSelect;
+        private bool _canToggle;
 
         // Toggle button (always visible, outside main panel)
         private GameObject _toggleBtnObj;
@@ -100,7 +100,7 @@ namespace DeckDuel.UI
 
         public void Toggle()
         {
-            if (!_inCharacterSelect) return;
+            if (!_canToggle) return;
             EnsureUI();
             if (_isVisible) Hide(); else Show();
         }
@@ -148,7 +148,7 @@ namespace DeckDuel.UI
         {
             orig(self);
 
-            _inCharacterSelect = true;
+            _canToggle = true;
 
             // Activate canvas so toggle button is visible, but don't open the full panel
             EnsureUI();
@@ -156,13 +156,28 @@ namespace DeckDuel.UI
             _borderPanel?.SetActive(false);
             _isVisible = false;
             UpdateToggleLabel();
+
+            // Re-enable submit for a fresh lobby
+            if (_submitButton != null) _submitButton.interactable = true;
+            if (_statusText != null) _statusText.text = "";
         }
 
         private void OnRunStart_HideBuilder(Run run)
         {
-            _inCharacterSelect = false;
+            // Keep _canToggle = true so players can still open the deck builder
+            // during the DeckBuilding phase (F3 key). Just hide the panel for now.
+            _borderPanel?.SetActive(false);
+            _isVisible = false;
+            UpdateToggleLabel();
+        }
 
-            // Hide everything when leaving character select (run started)
+        /// <summary>
+        /// Called by MatchStateMachine when the match actually starts (leaving DeckBuilding phase).
+        /// Fully hides and locks the deck builder.
+        /// </summary>
+        public void OnMatchStarted()
+        {
+            _canToggle = false;
             _borderPanel?.SetActive(false);
             _canvasObj?.SetActive(false);
             _isVisible = false;
@@ -943,8 +958,10 @@ namespace DeckDuel.UI
             // Send to host
             if (NetworkServer.active)
             {
-                // We are the host — directly hand deck to state machine
-                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(_currentDeck);
+                // We are the host — serialize+deserialize to create a safe copy
+                // (avoids sharing the mutable _currentDeck reference)
+                var deckCopy = Deck.Deserialize(_currentDeck.Serialize());
+                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(deckCopy);
                 _statusText.text = "Deck submitted (host).";
                 _submitButton.interactable = false;
             }
