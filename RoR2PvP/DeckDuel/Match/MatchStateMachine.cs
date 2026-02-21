@@ -40,7 +40,7 @@ namespace DeckDuel.Match
         private float _matchEndDelay;
         private const float MatchEndDelayDuration = 7f;
         private bool _stageHooked;
-        private Deck _pendingDeck;
+        private readonly List<Deck> _pendingDecks = new List<Deck>();
         private bool _pendingMatchStart;
 
         // Respawn queue: (player, delay remaining)
@@ -91,13 +91,14 @@ namespace DeckDuel.Match
             DeckDuelPlugin.Instance.PvPSetup.EnableDuelMode();
             StartDeckBuilding();
 
-            // Process any deck submitted during character select (Lobby phase)
-            if (_pendingDeck != null)
+            // Process any decks submitted during character select (Lobby phase)
+            if (_pendingDecks.Count > 0)
             {
-                Log.Info("Processing pending deck from character select...");
-                var pending = _pendingDeck;
-                _pendingDeck = null;
-                OnDeckReceived(pending);
+                Log.Info($"Processing {_pendingDecks.Count} pending deck(s) from character select...");
+                var pending = new List<Deck>(_pendingDecks);
+                _pendingDecks.Clear();
+                foreach (var deck in pending)
+                    OnDeckReceived(deck);
             }
         }
 
@@ -139,8 +140,8 @@ namespace DeckDuel.Match
             // Accept decks during Lobby (char select) — store as pending until run starts
             if (Phase == MatchPhase.Lobby)
             {
-                _pendingDeck = deck;
-                Log.Info($"Deck received during Lobby — stored as pending. Cards={deck.Cards.Count}, Cost={deck.TotalCost}");
+                _pendingDecks.Add(deck);
+                Log.Info($"Deck received during Lobby — stored as pending ({_pendingDecks.Count} total). Cards={deck.Cards.Count}, Cost={deck.TotalCost}");
                 new DeckResultMessage(true).Send(NetworkDestination.Clients);
                 return;
             }
@@ -340,9 +341,8 @@ namespace DeckDuel.Match
             var arena = DeckDuelPlugin.Instance.ArenaController;
             var dealer = DeckDuelPlugin.Instance.CardDealer;
 
-            // Activate PvP hooks and assign FFA teams
+            // Activate PvP hooks
             pvp.Activate();
-            pvp.AssignFFATeams(_players);
 
             // Setup arena
             Vector3 center = arena.FindArenaCenter();
@@ -355,6 +355,9 @@ namespace DeckDuel.Match
                 var body = _players[i].GetBody();
                 if (body != null) arena.TeleportPlayerToArena(body, i, _players.Count);
             }
+
+            // Assign FFA teams AFTER respawn+teleport so we set teams on actual current bodies
+            pvp.AssignFFATeams(_players);
 
             // Update AI target after teleporting
             if (IsSoloMode && _players.Count >= 2)
@@ -872,6 +875,7 @@ namespace DeckDuel.Match
             _players.Clear();
             _eliminated.Clear();
             _pendingMatchStart = false;
+            _pendingDecks.Clear();
             IsTiebreak = false;
             _respawnQueue.Clear();
             DestroyEnemyIndicators();
