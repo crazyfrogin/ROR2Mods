@@ -182,15 +182,52 @@ namespace DeckDuel.Match
 
         public Vector3 GetSpawnPosition(int playerIndex, int totalPlayers = 2)
         {
-            // Distribute players evenly around a circle inside the arena
-            float offset = Mathf.Max(10f, _currentRadius * 0.6f);
             if (totalPlayers <= 1)
-                return _arenaCenter;
+                return SnapToGround(_arenaCenter);
 
+            // Use a fixed, reasonable spread distance (not proportional to map radius)
+            float offset = 20f;
             float angle = (2f * Mathf.PI * playerIndex) / totalPlayers;
             float x = Mathf.Sin(angle) * offset;
             float z = Mathf.Cos(angle) * offset;
-            return _arenaCenter + new Vector3(x, 0f, z);
+            Vector3 pos = _arenaCenter + new Vector3(x, 0f, z);
+            return SnapToGround(pos);
+        }
+
+        /// <summary>
+        /// Raycast downward from well above the target position to find actual ground.
+        /// Falls back to the nearest SpawnPoint if the raycast misses.
+        /// </summary>
+        private Vector3 SnapToGround(Vector3 pos)
+        {
+            // Cast from high above to find the ground
+            Vector3 rayStart = new Vector3(pos.x, pos.y + 200f, pos.z);
+            if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 400f, LayerIndex.world.mask))
+            {
+                return hit.point + Vector3.up * 1.5f; // slight offset above ground
+            }
+
+            // Raycast missed — try to use a nearby SpawnPoint
+            var spawnPoints = SpawnPoint.readOnlyInstancesList;
+            if (spawnPoints != null && spawnPoints.Count > 0)
+            {
+                float bestDist = float.MaxValue;
+                Vector3 bestPos = pos;
+                foreach (var sp in spawnPoints)
+                {
+                    float dist = Vector3.Distance(sp.transform.position, pos);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        bestPos = sp.transform.position;
+                    }
+                }
+                Log.Warning($"SnapToGround: raycast missed at {pos}, using nearest SpawnPoint at {bestPos}");
+                return bestPos;
+            }
+
+            Log.Warning($"SnapToGround: no ground found at {pos}, returning original position");
+            return pos;
         }
 
         public Vector3 FindArenaCenter()
@@ -226,6 +263,15 @@ namespace DeckDuel.Match
 #pragma warning disable CS0618
             TeleportHelper.TeleportBody(body, spawnPos);
 #pragma warning restore CS0618
+
+            // Zero out velocity to prevent momentum from a previous fall
+            var motor = body.characterMotor;
+            if (motor != null)
+            {
+                motor.velocity = Vector3.zero;
+                motor.rootMotion = Vector3.zero;
+            }
+
             Log.Info($"Teleported {body.GetUserName()} to arena position {spawnPos}");
         }
 

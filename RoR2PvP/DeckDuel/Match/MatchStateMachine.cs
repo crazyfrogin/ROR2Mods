@@ -592,6 +592,14 @@ namespace DeckDuel.Match
             var body = master.GetBody();
             if (body != null)
             {
+                // Zero out velocity to prevent momentum from a previous fall
+                var motor = body.characterMotor;
+                if (motor != null)
+                {
+                    motor.velocity = Vector3.zero;
+                    motor.rootMotion = Vector3.zero;
+                }
+
                 // Heal to full
                 body.healthComponent.Heal(body.healthComponent.fullHealth, default);
                 if (body.healthComponent.shield < body.healthComponent.fullShield)
