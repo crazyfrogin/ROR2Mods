@@ -81,7 +81,9 @@ namespace DeckDuel.Match
             if (!NetworkServer.active) return;
 
             // Detect player count and solo mode
-            int humanCount = PlayerCharacterMasterController.instances.Count;
+            // NOTE: PlayerCharacterMasterController.instances is empty at onRunStartGlobal
+            // time because masters aren't created until stage load. Use NetworkUser list instead.
+            int humanCount = NetworkUser.readOnlyInstancesList.Count;
             IsSoloMode = humanCount <= 1 && DeckDuelPlugin.Cfg.EnableAIOpponent.Value;
             _expectedPlayerCount = IsSoloMode ? 2 : humanCount;
 
@@ -255,7 +257,12 @@ namespace DeckDuel.Match
                 if (body == null || !body.healthComponent.alive) return false;
             }
 
-            if (!IsSoloMode && duelists.Count < _expectedPlayerCount) return false;
+            // In solo mode, we need at least 1 human; in multiplayer, need all expected humans
+            int humansNeeded = IsSoloMode ? 1 : _expectedPlayerCount;
+            if (duelists.Count < humansNeeded)
+            {
+                return false;
+            }
 
             Log.Info("TryBeginGame: All players have bodies, starting game.");
             AssignPlayers();
