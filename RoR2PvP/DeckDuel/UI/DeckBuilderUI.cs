@@ -961,7 +961,9 @@ namespace DeckDuel.UI
                 // We are the host — serialize+deserialize to create a safe copy
                 // (avoids sharing the mutable _currentDeck reference)
                 var deckCopy = Deck.Deserialize(_currentDeck.Serialize());
-                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(deckCopy);
+                var networkUser = RoR2.LocalUserManager.GetFirstLocalUser()?.currentNetworkUser;
+                uint senderNetId = networkUser?.netId.Value ?? 0;
+                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(deckCopy, senderNetId);
                 _statusText.text = "Deck submitted (host).";
                 _submitButton.interactable = false;
             }

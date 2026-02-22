@@ -1,5 +1,6 @@
 using R2API.Networking;
 using R2API.Networking.Interfaces;
+using RoR2;
 using UnityEngine.Networking;
 
 namespace DeckDuel.Networking
@@ -19,22 +20,28 @@ namespace DeckDuel.Networking
     public class DeckSubmitMessage : INetMessage
     {
         private byte[] _deckData;
+        private uint _senderNetId;
 
         public DeckSubmitMessage() { }
 
         public DeckSubmitMessage(Models.Deck deck)
         {
             _deckData = deck.Serialize();
+            // Include sender's NetworkUser netId so the host can match this deck to the correct player
+            var networkUser = LocalUserManager.GetFirstLocalUser()?.currentNetworkUser;
+            _senderNetId = networkUser?.netId.Value ?? 0;
         }
 
         public void Serialize(NetworkWriter writer)
         {
+            writer.Write(_senderNetId);
             writer.Write(_deckData.Length);
             writer.Write(_deckData, 0, _deckData.Length);
         }
 
         public void Deserialize(NetworkReader reader)
         {
+            _senderNetId = reader.ReadUInt32();
             int length = reader.ReadInt32();
             _deckData = reader.ReadBytes(length);
         }
@@ -49,8 +56,8 @@ namespace DeckDuel.Networking
 
             if (result.IsValid)
             {
-                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(deck);
-                Log.Info("Deck received and validated successfully.");
+                DeckDuelPlugin.Instance.MatchStateMachine.OnDeckReceived(deck, _senderNetId);
+                Log.Info($"Deck received and validated successfully from netId={_senderNetId}.");
             }
             else
             {

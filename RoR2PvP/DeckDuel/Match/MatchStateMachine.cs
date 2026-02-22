@@ -23,14 +23,14 @@ namespace DeckDuel.Match
 
         // N-player state
         private readonly List<CharacterMaster> _players = new List<CharacterMaster>();
-        private readonly List<Deck> _decks = new List<Deck>();
+        private readonly Dictionary<uint, Deck> _decks = new Dictionary<uint, Deck>();
+        private Deck _aiDeck; // AI-generated deck for solo mode
         private int[] _scores = System.Array.Empty<int>();
         private int[] _stocks = System.Array.Empty<int>();
         private readonly HashSet<int> _eliminated = new HashSet<int>();
         private int _expectedPlayerCount;
 
         private RoundTimer _timer;
-        private int _decksReceived;
         private bool _gameEndHandled;
         private float _gameEndDelay;
         private const float GameEndDelayDuration = 3f;
@@ -40,7 +40,7 @@ namespace DeckDuel.Match
         private float _matchEndDelay;
         private const float MatchEndDelayDuration = 7f;
         private bool _stageHooked;
-        private readonly List<Deck> _pendingDecks = new List<Deck>();
+        private readonly List<(Deck deck, uint senderNetId)> _pendingDecks = new List<(Deck, uint)>();
         private bool _pendingMatchStart;
 
         // Respawn queue: (player, delay remaining)
@@ -97,10 +97,10 @@ namespace DeckDuel.Match
             if (_pendingDecks.Count > 0)
             {
                 Log.Info($"Processing {_pendingDecks.Count} pending deck(s) from character select...");
-                var pending = new List<Deck>(_pendingDecks);
+                var pending = new List<(Deck deck, uint senderNetId)>(_pendingDecks);
                 _pendingDecks.Clear();
-                foreach (var deck in pending)
-                    OnDeckReceived(deck);
+                foreach (var entry in pending)
+                    OnDeckReceived(entry.deck, entry.senderNetId);
             }
         }
 
@@ -124,7 +124,7 @@ namespace DeckDuel.Match
 
             Phase = MatchPhase.DeckBuilding;
             _decks.Clear();
-            _decksReceived = 0;
+            _aiDeck = null;
             _scores = new int[_expectedPlayerCount];
             GameNumber = 0;
             IsTiebreak = false;
@@ -133,47 +133,46 @@ namespace DeckDuel.Match
             Log.Info($"Deck building phase started. Waiting for {_expectedPlayerCount} deck(s)...");
         }
 
-        public void OnDeckReceived(Deck deck)
+        public void OnDeckReceived(Deck deck, uint senderNetId)
         {
-            Log.Info($">>> OnDeckReceived: Phase={Phase}, NetworkServer.active={NetworkServer.active}, IsSoloMode={IsSoloMode}, decksReceived={_decksReceived}, deckCards={deck?.Cards?.Count}");
+            Log.Info($">>> OnDeckReceived: Phase={Phase}, NetworkServer.active={NetworkServer.active}, IsSoloMode={IsSoloMode}, decksHave={_decks.Count}, senderNetId={senderNetId}, deckCards={deck?.Cards?.Count}");
 
             if (!NetworkServer.active) { Log.Warning("OnDeckReceived: Not server, ignoring."); return; }
 
             // Accept decks during Lobby (char select) — store as pending until run starts
             if (Phase == MatchPhase.Lobby)
             {
-                _pendingDecks.Add(deck);
-                Log.Info($"Deck received during Lobby — stored as pending ({_pendingDecks.Count} total). Cards={deck.Cards.Count}, Cost={deck.TotalCost}");
+                _pendingDecks.Add((deck, senderNetId));
+                Log.Info($"Deck received during Lobby — stored as pending ({_pendingDecks.Count} total). Cards={deck.Cards.Count}, Cost={deck.TotalCost}, senderNetId={senderNetId}");
                 new DeckResultMessage(true).Send(NetworkDestination.Clients);
                 return;
             }
 
             if (Phase != MatchPhase.DeckBuilding) { Log.Warning($"OnDeckReceived: Phase is {Phase}, not DeckBuilding. Ignoring deck."); return; }
 
-            _decksReceived++;
-            _decks.Add(deck);
-            Log.Info($"Player {_decksReceived} deck received. Cards={deck.Cards.Count}, Cost={deck.TotalCost}");
+            _decks[senderNetId] = deck;
+            Log.Info($"Deck received from netId={senderNetId}. Cards={deck.Cards.Count}, Cost={deck.TotalCost}. Total decks: {_decks.Count}");
 
             // Send approval
             new DeckResultMessage(true).Send(NetworkDestination.Clients);
 
             int decksNeeded = IsSoloMode ? 1 : _expectedPlayerCount;
 
-            if (IsSoloMode && _decksReceived >= 1)
+            if (IsSoloMode && _decks.Count >= 1)
             {
                 Log.Info("Solo mode: generating AI deck and waiting for player spawn...");
                 var aiOpponent = DeckDuelPlugin.Instance.AIOpponent;
-                _decks.Add(aiOpponent.GenerateRandomDeck());
+                _aiDeck = aiOpponent.GenerateRandomDeck();
                 _pendingMatchStart = true;
             }
-            else if (_decksReceived >= decksNeeded)
+            else if (_decks.Count >= decksNeeded)
             {
                 Log.Info($"All {decksNeeded} decks received, waiting for player spawn...");
                 _pendingMatchStart = true;
             }
             else
             {
-                Log.Info($"Waiting for more decks. Have {_decksReceived}, need {decksNeeded}.");
+                Log.Info($"Waiting for more decks. Have {_decks.Count}, need {decksNeeded}.");
             }
         }
 
@@ -250,6 +249,17 @@ namespace DeckDuel.Match
             var duelists = DeckDuelPlugin.Instance.PvPSetup.GetDuelists();
             if (duelists.Count < 1) return false;
 
+            // Safety re-check: if we detected solo mode at OnRunStart but now see multiple
+            // human players, correct IsSoloMode. This handles edge cases where NetworkUser
+            // count was wrong at onRunStartGlobal time.
+            if (IsSoloMode && duelists.Count > 1)
+            {
+                Log.Warning($"TryBeginGame: IsSoloMode was true but found {duelists.Count} human duelists — correcting to multiplayer mode.");
+                IsSoloMode = false;
+                _expectedPlayerCount = duelists.Count;
+                _aiDeck = null; // discard any AI deck
+            }
+
             // All human players must have alive bodies
             foreach (var master in duelists)
             {
@@ -264,7 +274,14 @@ namespace DeckDuel.Match
                 return false;
             }
 
-            Log.Info("TryBeginGame: All players have bodies, starting game.");
+            // In multiplayer, verify we have enough decks before starting
+            int decksNeeded = IsSoloMode ? 1 : _expectedPlayerCount;
+            if (_decks.Count < decksNeeded)
+            {
+                return false;
+            }
+
+            Log.Info($"TryBeginGame: All {duelists.Count} players have bodies and {_decks.Count} decks received. Starting game.");
             AssignPlayers();
             StartGame();
             return true;
@@ -379,9 +396,43 @@ namespace DeckDuel.Match
             if (!tiebreak)
             {
                 dealer.CleanupRound();
-                for (int i = 0; i < _players.Count && i < _decks.Count; i++)
+
+                // Match each player to their deck via NetworkUser netId
+                for (int i = 0; i < _players.Count; i++)
                 {
-                    if (_decks[i] != null) dealer.SetupDeck(_players[i], _decks[i]);
+                    var master = _players[i];
+                    Deck playerDeck = null;
+
+                    // Try to find this player's deck by their NetworkUser netId
+                    var pcmc = master.GetComponent<PlayerCharacterMasterController>();
+                    if (pcmc != null && pcmc.networkUser != null)
+                    {
+                        uint netId = pcmc.networkUser.netId.Value;
+                        if (_decks.TryGetValue(netId, out var deck))
+                        {
+                            playerDeck = deck;
+                            Log.Info($"StartGame: Matched deck for player {i} ({master.name}) via NetworkUser netId={netId}, cards={deck.Cards.Count}");
+                        }
+                        else
+                        {
+                            Log.Warning($"StartGame: No deck found for player {i} ({master.name}), NetworkUser netId={netId}");
+                        }
+                    }
+                    else if (IsSoloMode && _aiDeck != null)
+                    {
+                        // AI player in solo mode
+                        playerDeck = _aiDeck;
+                        Log.Info($"StartGame: Using AI deck for player {i} ({master.name}), cards={_aiDeck.Cards.Count}");
+                    }
+                    else
+                    {
+                        Log.Warning($"StartGame: Could not resolve deck for player {i} ({master.name}) — no PCMC/NetworkUser and not AI");
+                    }
+
+                    if (playerDeck != null)
+                    {
+                        dealer.SetupDeck(master, playerDeck);
+                    }
                 }
 
                 // Deal starting cards to all players
@@ -888,8 +939,8 @@ namespace DeckDuel.Match
             GameNumber = 0;
             _scores = System.Array.Empty<int>();
             _stocks = System.Array.Empty<int>();
-            _decksReceived = 0;
             _decks.Clear();
+            _aiDeck = null;
             _players.Clear();
             _eliminated.Clear();
             _pendingMatchStart = false;
