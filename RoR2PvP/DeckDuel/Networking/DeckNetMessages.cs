@@ -19,6 +19,8 @@ namespace DeckDuel.Networking
     /// </summary>
     public class DeckSubmitMessage : INetMessage
     {
+        private const uint FORMAT_MAGIC = 0xDECC0001;
+
         private byte[] _deckData;
         private uint _senderNetId;
 
@@ -34,22 +36,45 @@ namespace DeckDuel.Networking
 
         public void Serialize(NetworkWriter writer)
         {
+            writer.Write(FORMAT_MAGIC);
             writer.Write(_senderNetId);
-            writer.Write(_deckData.Length);
-            writer.Write(_deckData, 0, _deckData.Length);
+            writer.WriteBytesAndSize(_deckData, _deckData.Length);
         }
 
         public void Deserialize(NetworkReader reader)
         {
-            _senderNetId = reader.ReadUInt32();
-            int length = reader.ReadInt32();
-            _deckData = reader.ReadBytes(length);
+            uint firstWord = reader.ReadUInt32();
+            if (firstWord == FORMAT_MAGIC)
+            {
+                // New format: magic + senderNetId + bytesAndSize
+                _senderNetId = reader.ReadUInt32();
+                _deckData = reader.ReadBytesAndSize();
+            }
+            else
+            {
+                // Backward compat: old format where firstWord is the data length
+                _senderNetId = 0;
+                _deckData = reader.ReadBytes((int)firstWord);
+                Log.Warning("DeckSubmitMessage: old format detected (no sender ID). Both players should use the same DLL version.");
+            }
         }
 
         public void OnReceived()
         {
             if (!NetworkServer.active)
                 return;
+
+            // If old format (no sender ID), infer from the first non-local NetworkUser
+            if (_senderNetId == 0)
+            {
+                foreach (var nu in NetworkUser.readOnlyInstancesList)
+                {
+                    if (nu.isLocalPlayer) continue;
+                    _senderNetId = nu.netId.Value;
+                    Log.Warning($"Inferred sender netId={_senderNetId} from first non-local NetworkUser (old DLL compat).");
+                    break;
+                }
+            }
 
             var deck = Models.Deck.Deserialize(_deckData);
             var result = Models.DeckValidator.Validate(deck);
